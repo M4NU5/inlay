@@ -2,6 +2,7 @@ import { acquireDataDirectoryLock } from "./data-lock.ts";
 import { parseConfiguration, usage, type ServerConfiguration } from "./configuration.ts";
 import { createHTTPServer } from "./http-server.ts";
 import { GenerationService, defaultProofreadingPrompt } from "./generation-service.ts";
+import { logError, logInfo } from "./log.ts";
 import { NativeInference } from "./inference/native-inference.ts";
 
 export async function startServer(configuration: ServerConfiguration) {
@@ -46,7 +47,7 @@ if (import.meta.main) {
       console.log(defaultProofreadingPrompt);
     else {
       const server = await startServer(await parseConfiguration());
-      console.log(`Inlay server listening at ${server.address}`);
+      logInfo("server_listening", { address: server.address });
       const stop = () => {
         void server.close().then(
           () => process.exit(0),
@@ -57,7 +58,7 @@ if (import.meta.main) {
       process.once("SIGINT", stop);
     }
   } catch (error) {
-    console.error(error instanceof Error ? error.message : "The server could not start.");
+    logError("server_start_failed", error);
     process.exitCode = 1;
   }
 }

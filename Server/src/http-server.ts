@@ -8,6 +8,7 @@ import {
   type WisprFlowArtifactName,
 } from "./api.ts";
 import { ServiceError } from "./errors.ts";
+import { logError } from "./log.ts";
 import type { GenerationService } from "./generation-service.ts";
 import { validateBody } from "./validation.ts";
 
@@ -94,9 +95,16 @@ export function createHTTPServer(service: GenerationService, token?: string) {
   app.addHook("onSend", async (_request, reply) => {
     reply.header("Cache-Control", "no-store");
   });
-  app.setErrorHandler((error, _request, reply) => {
-    if (error instanceof ServiceError)
+  app.setErrorHandler((error, request, reply) => {
+    if (error instanceof ServiceError) {
+      if (error.status >= 500)
+        logError("request_failed", error, {
+          route: request.routeOptions.url,
+          method: request.method,
+          status: error.status,
+        });
       return reply.code(error.status).send({ code: error.code, message: error.message });
+    }
     const failure = error as { code?: string; statusCode?: number };
     if (failure.code === "FST_ERR_CTP_BODY_TOO_LARGE")
       return reply
@@ -108,6 +116,11 @@ export function createHTTPServer(service: GenerationService, token?: string) {
         message: "The request could not be accepted.",
       });
     }
+    logError("request_failed", error, {
+      route: request.routeOptions.url,
+      method: request.method,
+      status: 500,
+    });
     return reply
       .code(500)
       .send({ code: "internal_error", message: "The server could not complete this request." });
