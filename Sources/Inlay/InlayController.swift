@@ -1081,7 +1081,14 @@ final class InlayController: ObservableObject {
                 pending.upload.cancel(); pending.pipe.cancel(); pending.destination?.cancel()
                 if !pending.sealed { Task { try? await connection.cancel(id) } }
                 guard !Task.isCancelled else { return }
-                if sessionID == current {
+                if let clientError = error as? ServerClientError, case .processingTimedOut = clientError {
+                    // Not a failure: stop blocking later deliveries and let the
+                    // persisted-pending reconciliation surface the result.
+                    if sessionID == current {
+                        activity = .idle
+                        statusMessage = "Still processing on the server"
+                    }
+                } else if sessionID == current {
                     if error is URLError { serverHealth = nil; serverStatusMessage = Self.connectionMessage(error) }
                     showError(Self.connectionMessage(error))
                 } else {

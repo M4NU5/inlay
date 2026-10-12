@@ -7,6 +7,7 @@ enum ServerClientError: LocalizedError {
     case rejected(Int, String)
     case invalidResponse
     case disconnected
+    case processingTimedOut
     case uploadBacklog
     case importArtifactTooLarge(WisprFlowArtifactName, Int)
     case dictionaryArchiveTooLarge(Int)
@@ -17,6 +18,7 @@ enum ServerClientError: LocalizedError {
         case .rejected(_, let message): message
         case .invalidResponse: "The server returned an invalid response."
         case .disconnected: "The server connection was interrupted. Any completed result is available in shared history."
+        case .processingTimedOut: "The server is still processing this recording. The result will be ready to copy when it finishes."
         case .uploadBacklog: "The connection cannot keep up with the microphone. This recording was stopped."
         case .importArtifactTooLarge(let name, let bytes):
             "\(name.rawValue) is \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)), above the 8 MiB source-artifact limit."
@@ -288,8 +290,10 @@ extension ServerClient {
 
     func events(_ id: UUID, onUpdate: @escaping @Sendable (GenerationRecord) async -> Void) async throws -> GenerationRecord {
         var recoveryFailures = 0
+        let deadline = ContinuousClock.now.advanced(by: .seconds(900))
         while true {
             try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { throw ServerClientError.processingTimedOut }
             do { return try await readEvents(id, onUpdate: onUpdate) }
             catch {
                 try Task.checkCancellation()
@@ -311,7 +315,9 @@ extension ServerClient {
                 recoveryFailures += 1
                 guard recoveryFailures < 5 else { throw error }
             }
-            try await Task.sleep(for: .seconds(min(8, 1 << recoveryFailures)))
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard remaining > .zero else { throw ServerClientError.processingTimedOut }
+            try await Task.sleep(for: min(Duration.seconds(min(8, 1 << recoveryFailures)), remaining))
         }
     }
 
