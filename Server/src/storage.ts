@@ -73,19 +73,23 @@ export async function atomicPrivateWrite(path: string, data: Uint8Array | string
     await file.close();
     await rename(temporary, path);
     // Persist the directory entry before acknowledging a durable mutation.
-    const directory = await open(
-      dirname(path),
-      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-    );
-    try {
-      await directory.sync();
-    } finally {
-      await directory.close();
-    }
+    await syncDirectory(dirname(path));
   } catch (error) {
     await file.close().catch(() => {});
     await rm(temporary, { force: true }).catch(() => {});
     throw error;
+  }
+}
+
+export async function syncDirectory(path: string) {
+  const directory = await open(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
   }
 }
 

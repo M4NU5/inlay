@@ -36,6 +36,7 @@ import {
   requireDiskSpace,
   requireDiskSpaceFor,
   requireRegularDirectory,
+  syncDirectory,
 } from "./storage.ts";
 import { WisprFlowImports } from "./imports.ts";
 import {
@@ -181,6 +182,8 @@ export class GenerationService {
   private stopping = false;
   private timer?: ReturnType<typeof setInterval>;
   private queue: Promise<unknown> = Promise.resolve();
+  private generationQueues = new Map<string, Promise<unknown>>();
+  private importQueue: Promise<unknown> = Promise.resolve();
   private subscribers = new Map<string, Set<Watcher>>();
   private readonly imports: WisprFlowImports;
   private constructor(
@@ -203,6 +206,24 @@ export class GenerationService {
   private mutate<T>(operation: () => Promise<T> | T): Promise<T> {
     const result = this.queue.then(operation);
     this.queue = result.catch(() => {});
+    return result;
+  }
+  // Lock ordering: never await a generation lock while holding the global
+  // queue, and global-queue operations never call generation-locked methods.
+  private withGenerationLock<T>(id: string, operation: () => Promise<T> | T): Promise<T> {
+    const key = id.toUpperCase();
+    const previous = this.generationQueues.get(key) ?? Promise.resolve();
+    const result = previous.then(operation);
+    const tail = result.catch(() => {});
+    this.generationQueues.set(key, tail);
+    void tail.finally(() => {
+      if (this.generationQueues.get(key) === tail) this.generationQueues.delete(key);
+    });
+    return result;
+  }
+  private withImportQueue<T>(operation: () => Promise<T> | T): Promise<T> {
+    const result = this.importQueue.then(operation);
+    this.importQueue = result.catch(() => {});
     return result;
   }
   private directory(id: string) {
@@ -381,19 +402,23 @@ export class GenerationService {
       const record = this.records.get(id);
       if (record) for (const watcher of watchers) this.yieldTo(watcher, record);
     }
-    await this.mutate(async () => {
+    await this.withImportQueue(async () => {
       await this.imports.expireImportStages();
     });
-    await this.mutate(async () => {
-      for (const record of this.records.values()) {
-        if (
-          record.status === "receiving" &&
-          (Date.now() - Date.parse(record.updatedAt) > RECEIVING_IDLE_MS ||
-            Date.now() - Date.parse(record.createdAt) > RECEIVING_TOTAL_MS)
+    for (const snapshot of this.records.values()) {
+      if (
+        snapshot.status !== "receiving" ||
+        !(
+          Date.now() - Date.parse(snapshot.updatedAt) > RECEIVING_IDLE_MS ||
+          Date.now() - Date.parse(snapshot.createdAt) > RECEIVING_TOTAL_MS
         )
-          await this.cancelRecord(record.id);
-      }
-    });
+      )
+        continue;
+      await this.withGenerationLock(snapshot.id, async () => {
+        const record = this.records.get(snapshot.id);
+        if (record?.status === "receiving") await this.cancelRecord(record.id);
+      });
+    }
   }
   async shutdown() {
     this.stopping = true;
@@ -408,8 +433,10 @@ export class GenerationService {
     // Sealed work survives shutdown as queued; only unsealed receiving
     // sessions are cancelled. This runs after the queue drains so the
     // queued state is the final write.
-    await this.mutate(async () => {
-      for (const record of this.records.values()) {
+    for (const snapshot of this.records.values()) {
+      await this.withGenerationLock(snapshot.id, async () => {
+        const record = this.records.get(snapshot.id);
+        if (!record) return;
         if (record.status === "receiving") await this.cancelRecord(record.id);
         else if (!terminal(record) && record.inferenceAudio) {
           const queued = copy(record);
@@ -419,8 +446,8 @@ export class GenerationService {
           queued.updatedAt = now();
           await this.save(queued).catch(() => this.publish(queued));
         }
-      }
-    });
+      });
+    }
     await this.mutate(() => {
       for (const watchers of this.subscribers.values())
         for (const watcher of watchers) {
@@ -583,7 +610,7 @@ export class GenerationService {
     data: Uint8Array,
   ): Promise<AudioChunkReceipt> {
     const bytes = Buffer.from(data);
-    return this.mutate(async () => {
+    return this.withGenerationLock(id, async () => {
       const record = this.getInternal(id);
       id = record.id;
       if (record.status !== "receiving")
@@ -685,7 +712,7 @@ export class GenerationService {
           "recording_limit",
           "Recordings are limited to 180 seconds and 256 MiB per audio stream.",
         );
-      await requireDiskSpace(this.configuration.dataDirectory);
+      if (upload.bytes === 0) await requireDiskSpace(this.configuration.dataDirectory);
       const file = await open(
         path,
         constants.O_WRONLY |
@@ -709,7 +736,6 @@ export class GenerationService {
           if (!result.bytesWritten) throw new Error("Audio write failed.");
           written += result.bytesWritten;
         }
-        await file.sync();
       } finally {
         await file.close();
       }
@@ -726,7 +752,7 @@ export class GenerationService {
     });
   }
   finish(id: string, request: FinishGenerationRequest) {
-    return this.mutate(async () => {
+    return this.withGenerationLock(id, async () => {
       const record = this.getInternal(id);
       id = record.id;
       if (record.status !== "receiving") {
@@ -905,10 +931,10 @@ export class GenerationService {
   }
 
   cancel(id: string) {
-    return this.mutate(() => this.cancelRecord(id));
+    return this.withGenerationLock(id, () => this.cancelRecord(id));
   }
   reprocess(id: string) {
-    return this.mutate(async () => {
+    return this.withGenerationLock(id, async () => {
       const record = this.getInternal(id);
       if (record.importedSource)
         throw new ServiceError(
@@ -981,7 +1007,7 @@ export class GenerationService {
     return copy(record);
   }
   recordDelivery(id: string, receipt: DeliveryReceipt) {
-    return this.mutate(async () => {
+    return this.withGenerationLock(id, async () => {
       const record = this.getInternal(id);
       if (record.importedSource)
         throw new ServiceError(
@@ -1027,7 +1053,7 @@ export class GenerationService {
     });
   }
   delete(id: string) {
-    return this.mutate(async () => {
+    return this.withGenerationLock(id, async () => {
       const record = this.getInternal(id);
       if (!terminal(record))
         throw new ServiceError(
@@ -1042,7 +1068,7 @@ export class GenerationService {
     });
   }
   artifact(id: string, filename: string) {
-    return this.mutate(async () => {
+    return this.withGenerationLock(id, async () => {
       const record = this.getInternal(id);
       const allowed = [
         "metadata.json",
@@ -1077,26 +1103,26 @@ export class GenerationService {
     });
   }
   knownWisprFlowIDs(request: WisprFlowKnownIDsRequest) {
-    return this.mutate(() => this.imports.knownWisprFlowIDs(request));
+    return this.withImportQueue(() => this.imports.knownWisprFlowIDs(request));
   }
   beginWisprFlowImport(request: WisprFlowImportRequest) {
-    return this.mutate(() => {
+    return this.withImportQueue(() => {
       if (this.stopping)
         throw new ServiceError(503, "server_stopping", "The server is shutting down.");
       return this.imports.beginWisprFlowImport(request);
     });
   }
   uploadWisprFlowArtifact(id: string, filename: WisprFlowArtifactName, data: Uint8Array) {
-    return this.mutate(() => this.imports.uploadWisprFlowArtifact(id, filename, data));
+    return this.withImportQueue(() => this.imports.uploadWisprFlowArtifact(id, filename, data));
   }
   completeWisprFlowImport(id: string) {
-    return this.mutate(() => this.imports.completeWisprFlowImport(id));
+    return this.withImportQueue(() => this.imports.completeWisprFlowImport(id));
   }
   cancelWisprFlowImport(id: string) {
-    return this.mutate(() => this.imports.cancelWisprFlowImport(id));
+    return this.withImportQueue(() => this.imports.cancelWisprFlowImport(id));
   }
   archiveWisprFlowDictionary(data: Uint8Array) {
-    return this.mutate(() => this.imports.archiveWisprFlowDictionary(data));
+    return this.withImportQueue(() => this.imports.archiveWisprFlowDictionary(data));
   }
   private async seal(id: string, kind: AudioKind, upload: Upload): Promise<AudioArtifact> {
     const directory = this.directory(id);
@@ -1155,6 +1181,7 @@ export class GenerationService {
       await source.close();
     }
     await rename(partial, join(directory, `${kind}.wav`));
+    await syncDirectory(directory);
     await rm(join(directory, `${kind}.raw`));
     return {
       filename: `${kind}.wav`,
@@ -1212,7 +1239,7 @@ export class GenerationService {
     let transcribeMs = 0;
     let proofMs = 0;
     try {
-      let record = await this.mutate(async () => {
+      let record = await this.withGenerationLock(id, async () => {
         const record = this.getInternal(id);
         signal.throwIfAborted();
         if (terminal(record)) return undefined;
@@ -1229,7 +1256,7 @@ export class GenerationService {
         // Parakeet has no vocabulary prompt; dictionary rules apply after recognition.
         [],
         (value) => {
-          void this.mutate(() => this.progress(id, value));
+          this.progress(id, value);
         },
         signal,
         record.inferenceAudio ? record.inferenceAudio.frameCount / 16000 : undefined,
@@ -1252,7 +1279,7 @@ export class GenerationService {
       record.formattingRejectionReason = structured.formattingRejectionReason;
       record.consumedListControls = structured.consumedControls;
       if (settings.textCorrectionEnabled && structured.text) {
-        const updated = await this.mutate(async () => {
+        const updated = await this.withGenerationLock(id, async () => {
           signal.throwIfAborted();
           if (terminal(this.getInternal(id))) return false;
           record!.status = "proofreading";
@@ -1298,7 +1325,7 @@ export class GenerationService {
       record.status = "completed";
       record.updatedAt = now();
       record.progress = 1;
-      await this.mutate(async () => {
+      await this.withGenerationLock(id, async () => {
         signal.throwIfAborted();
         if (terminal(this.getInternal(id))) return;
         await atomicPrivateWrite(join(this.directory(id), "transcript.txt"), record!.finalText);
@@ -1321,7 +1348,7 @@ export class GenerationService {
           proofMs,
           totalMs: Math.round(performance.now() - startedAt),
         });
-      await this.mutate(async () => {
+      await this.withGenerationLock(id, async () => {
         const record = this.records.get(id);
         if (!record || terminal(record)) return;
         const failed = copy(record);
