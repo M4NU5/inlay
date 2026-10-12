@@ -316,8 +316,7 @@ final class InlayController: ObservableObject {
             guard endpoint == preferences.endpoint, !Task.isCancelled else { return }
             serverHealth = nil
             serverStatusMessage = Self.connectionMessage(error)
-            if isCapturing { failSession(serverStatusMessage, cancelServer: true) }
-            else if !isBusy, activity == .idle { statusMessage = serverStatusMessage }
+            if !isBusy, activity == .idle { statusMessage = serverStatusMessage }
         }
     }
 
