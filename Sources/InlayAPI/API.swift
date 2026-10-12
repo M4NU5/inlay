@@ -19,42 +19,10 @@ public enum InlayAPI {
     }
 }
 
-public struct DeviceIdentity: Codable, Equatable, Sendable {
-    public var id: String
-    public var name: String
-    public init(id: String, name: String) { self.id = id; self.name = name }
-}
 
-public struct DeviceSummary: Codable, Equatable, Sendable {
-    public var id: String
-    public var name: String
-    public var createdAt: Date
-    public var lastSeenAt: Date?
-    public var revokedAt: Date?
-    public init(id: String, name: String, createdAt: Date, lastSeenAt: Date? = nil, revokedAt: Date? = nil) {
-        self.id = id; self.name = name; self.createdAt = createdAt
-        self.lastSeenAt = lastSeenAt; self.revokedAt = revokedAt
-    }
-}
 
-public struct DeviceList: Codable, Equatable, Sendable {
-    public var devices: [DeviceSummary]
-    public var legacyEnrollmentClosed: Bool
-    public init(devices: [DeviceSummary], legacyEnrollmentClosed: Bool) {
-        self.devices = devices; self.legacyEnrollmentClosed = legacyEnrollmentClosed
-    }
-}
 
-public struct EnrollDeviceRequest: Codable, Equatable, Sendable {
-    public var device: DeviceIdentity
-    public init(device: DeviceIdentity) { self.device = device }
-}
 
-public struct EnrollDeviceResponse: Codable, Equatable, Sendable {
-    public var device: DeviceSummary
-    public var token: String
-    public init(device: DeviceSummary, token: String) { self.device = device; self.token = token }
-}
 
 public struct StorageUsage: Codable, Equatable, Sendable {
     public var generationCount: Int
@@ -229,17 +197,6 @@ public struct AudioArtifact: Codable, Equatable, Sendable {
     }
 }
 
-public struct ModelProvenance: Codable, Equatable, Sendable {
-    public var modelID: String
-    public var modelSHA256: String?
-    public var backend: String
-    public var engineVersion: String?
-    public var processingSeconds: Double?
-    public init(modelID: String, modelSHA256: String? = nil, backend: String, engineVersion: String? = nil, processingSeconds: Double? = nil) {
-        self.modelID = modelID; self.modelSHA256 = modelSHA256; self.backend = backend
-        self.engineVersion = engineVersion; self.processingSeconds = processingSeconds
-    }
-}
 
 public struct DeliveryReceipt: Codable, Equatable, Sendable {
     public var status: String
@@ -250,17 +207,6 @@ public struct DeliveryReceipt: Codable, Equatable, Sendable {
     }
 }
 
-public struct ModelHintUsage: Codable, Equatable, Sendable {
-    public var includedTerms: [String]
-    public var omittedTerms: [String]
-    public var tokenCount: Int?
-    public var tokenBudget: Int?
-
-    public init(includedTerms: [String], omittedTerms: [String], tokenCount: Int? = nil, tokenBudget: Int? = nil) {
-        self.includedTerms = includedTerms; self.omittedTerms = omittedTerms
-        self.tokenCount = tokenCount; self.tokenBudget = tokenBudget
-    }
-}
 
 public enum WisprFlowArtifactName: String, Codable, CaseIterable, Hashable, Sendable {
     case sourceJSON = "source.json"
@@ -444,8 +390,3 @@ public struct GenerationPage: Codable, Sendable {
     public init(items: [GenerationSummary], nextCursor: String? = nil) { self.items = items; self.nextCursor = nextCursor }
 }
 
-public struct APIErrorResponse: Codable, Sendable {
-    public var code: String
-    public var message: String
-    public init(code: String, message: String) { self.code = code; self.message = message }
-}
