@@ -175,7 +175,7 @@ final class InlayController: ObservableObject {
     private let audioDevices: AudioDeviceStore
     private let serverClientFactory: (() throws -> ServerClient)?
     private let hotkey = HotkeyMonitor()
-    private let outputMuter = SystemOutputMuter()
+    private let outputMuter: SystemOutputMuter
     private var subscriptions: Set<AnyCancellable> = []
     private var applyingConfiguration = false
     private var recordingTimer: Timer?
@@ -245,6 +245,8 @@ final class InlayController: ObservableObject {
          recorder: AudioRecorder? = nil, audioDevices: AudioDeviceStore? = nil,
          serverClient: (() throws -> ServerClient)? = nil) {
         self.configuration = configuration
+        outputMuter = SystemOutputMuter(
+            recordURL: configuration.url.deletingLastPathComponent().appendingPathComponent("output-mute.json"))
         self.recorder = recorder ?? AudioRecorder()
         self.audioDevices = audioDevices ?? AudioDeviceStore()
         self.serverClientFactory = serverClient
@@ -261,6 +263,7 @@ final class InlayController: ObservableObject {
         preferences.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         configuration.$configuration.removeDuplicates().sink { [weak self] in self?.applyConfiguration($0) }.store(in: &subscriptions)
         guard startServices else { return }
+        outputMuter.restorePersistedMute()
         bindServices()
         self.audioDevices.start()
         installLifecycleObservers()
