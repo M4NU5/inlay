@@ -28,6 +28,7 @@ import { validateBody } from "./validation.ts";
 import type { InferenceBackend } from "./inference/native-inference.ts";
 import { InferenceError } from "./inference/inference-error.ts";
 import { ServiceError } from "./errors.ts";
+import { logError, logInfo, logWarn } from "./log.ts";
 import {
   atomicPrivateWrite,
   ensureDirectory,
@@ -233,88 +234,133 @@ export class GenerationService {
         );
       this.preferences = loaded;
     } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+        throw new Error(
+          `Server preferences at ${path} are invalid: ${error instanceof Error ? error.message : "unreadable"}`,
+          { cause: error },
+        );
       await atomicPrivateWrite(path, JSON.stringify(this.preferences));
     }
     const requeue: { id: string; createdAt: string }[] = [];
+    let quarantined = 0;
     for (const name of await readdir(join(data, "generations"))) {
       if (!isUUID(name)) continue;
       const id = name.toUpperCase();
-      await requireRegularDirectory(join(data, "generations", name));
-      // Swift UUID filenames are uppercase; normalize migrated lowercase dirs.
-      if (name !== id) await rename(join(data, "generations", name), this.directory(id));
-      let record: GenerationRecord;
       try {
-        record = validateBody(
-          "GenerationRecord",
-          JSON.parse(
-            (
-              await readRegularFile(join(this.directory(id), "metadata.json"), MAX_METADATA_BYTES)
-            ).toString("utf8"),
-          ),
-        ) as GenerationRecord;
-      } catch (error) {
-        if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
-        throw error;
-      }
-      record.settings.preferences = normalizePreferences(record.settings.preferences);
-      if (
-        record.id.toUpperCase() !== id ||
-        record.schemaVersion !== 1 ||
-        ![
-          "receiving",
-          "queued",
-          "transcribing",
-          "proofreading",
-          "completed",
-          "failed",
-          "cancelled",
-        ].includes(record.status)
-      )
-        throw new ServiceError(500, "invalid_archive", "A generation has invalid metadata.");
-      record.id = id;
-      if (!terminal(record)) {
-        let sealed = false;
-        if (record.status !== "receiving" && record.inferenceAudio) {
-          try {
-            const file = await open(
-              join(this.directory(id), "inference.wav"),
-              constants.O_RDONLY | constants.O_NOFOLLOW,
-            );
-            try {
-              sealed = (await file.stat()).isFile();
-            } finally {
-              await file.close();
-            }
-          } catch {
-            sealed = false;
+        await requireRegularDirectory(join(data, "generations", name));
+        // Swift UUID filenames are uppercase; normalize migrated lowercase dirs.
+        if (name !== id) await rename(join(data, "generations", name), this.directory(id));
+        let record: GenerationRecord;
+        try {
+          record = validateBody(
+            "GenerationRecord",
+            JSON.parse(
+              (
+                await readRegularFile(join(this.directory(id), "metadata.json"), MAX_METADATA_BYTES)
+              ).toString("utf8"),
+            ),
+          ) as GenerationRecord;
+        } catch (error) {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+            logWarn("generation_metadata_missing", { id });
+            continue;
           }
+          throw error;
         }
-        if (sealed) {
-          record.status = "queued";
-          record.progress = 0;
-          delete record.error;
-          record.updatedAt = now();
-          requeue.push({ id, createdAt: record.createdAt });
-        } else {
-          const wasReceiving = record.status === "receiving";
-          record.status = "failed";
-          record.error = wasReceiving
-            ? "Server restarted before this generation completed."
-            : "Sealed audio is missing, so this generation cannot be transcribed.";
-          record.updatedAt = now();
-          delete record.progress;
-          await this.cleanPartial(id);
+        record.settings.preferences = normalizePreferences(record.settings.preferences);
+        if (
+          record.id.toUpperCase() !== id ||
+          record.schemaVersion !== 1 ||
+          ![
+            "receiving",
+            "queued",
+            "transcribing",
+            "proofreading",
+            "completed",
+            "failed",
+            "cancelled",
+          ].includes(record.status)
+        )
+          throw new ServiceError(500, "invalid_archive", "A generation has invalid metadata.");
+        record.id = id;
+        if (!terminal(record)) {
+          let sealed = false;
+          if (record.status !== "receiving" && record.inferenceAudio) {
+            try {
+              const file = await open(
+                join(this.directory(id), "inference.wav"),
+                constants.O_RDONLY | constants.O_NOFOLLOW,
+              );
+              try {
+                sealed = (await file.stat()).isFile();
+              } finally {
+                await file.close();
+              }
+            } catch {
+              sealed = false;
+            }
+          }
+          if (sealed) {
+            record.status = "queued";
+            record.progress = 0;
+            delete record.error;
+            record.updatedAt = now();
+            requeue.push({ id, createdAt: record.createdAt });
+          } else {
+            const wasReceiving = record.status === "receiving";
+            record.status = "failed";
+            record.error = wasReceiving
+              ? "Server restarted before this generation completed."
+              : "Sealed audio is missing, so this generation cannot be transcribed.";
+            record.updatedAt = now();
+            delete record.progress;
+            await this.cleanPartial(id);
+          }
+          if (Buffer.byteLength(JSON.stringify(record)) <= MAX_METADATA_BYTES)
+            await atomicPrivateWrite(
+              join(this.directory(id), "metadata.json"),
+              JSON.stringify(record),
+            );
         }
-        if (Buffer.byteLength(JSON.stringify(record)) <= MAX_METADATA_BYTES)
+        this.records.set(id, record);
+        this.imports.indexRecord(record);
+      } catch (error) {
+        this.records.delete(id);
+        try {
+          let source = this.directory(id);
+          for (const candidate of [this.directory(id), join(data, "generations", name)])
+            if (
+              await access(candidate).then(
+                () => true,
+                () => false,
+              )
+            ) {
+              source = candidate;
+              break;
+            }
+          let target = `${this.directory(id)}.quarantined`;
+          for (
+            let suffix = 2;
+            await access(target).then(
+              () => true,
+              () => false,
+            );
+            suffix++
+          )
+            target = `${this.directory(id)}.quarantined-${suffix}`;
+          await rename(source, target);
+          quarantined++;
           await atomicPrivateWrite(
-            join(this.directory(id), "metadata.json"),
-            JSON.stringify(record),
-          );
+            join(target, "quarantine-reason.txt"),
+            `${now()}\n${error instanceof Error ? error.message : "Invalid generation record."}\n`,
+          ).catch(() => {});
+          logError("generation_quarantined", error, { id, to: target });
+        } catch (quarantineError) {
+          logError("generation_quarantine_failed", quarantineError, { id });
+        }
       }
-      this.records.set(id, record);
-      this.imports.indexRecord(record);
     }
+    logInfo("archive_loaded", { records: this.records.size, quarantined });
     requeue.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     for (const entry of requeue) this.enqueueProcessing(entry.id, undefined);
   }
