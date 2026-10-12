@@ -184,7 +184,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-The source server hot reloads, listens on `0.0.0.0:8392`, and keeps data and its automatically created private token under `.local/dev-server`. On the same Mac, open [server liveness](http://localhost:8392/v1/liveness). Build helpers once with `./scripts/build-server.sh` and set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` to enable dictation. Missing assets leave the server running with `ready: false`; HTTP reachability does not establish working inference. CLI arguments and the environment variables above override development defaults, except that inherited `INLAY_SERVER_DATA_DIR` is ignored. Use `--data-dir` to explicitly select another development archive.
+The source server hot reloads, listens on `127.0.0.1:8392` (override with `--host`/`INLAY_SERVER_HOST` for deliberate LAN/Tailscale dev), and keeps data and its automatically created private token under `.local/dev-server`. On the same Mac, open [server liveness](http://localhost:8392/v1/liveness). Build helpers once with `./scripts/build-server.sh` and set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` to enable dictation. Missing assets leave the server running with `ready: false`; HTTP reachability does not establish working inference. CLI arguments and the environment variables above override development defaults, except that inherited `INLAY_SERVER_DATA_DIR` is ignored. Use `--data-dir` to explicitly select another development archive.
 
 ```sh
 bun run fmt

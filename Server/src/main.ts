@@ -1,8 +1,13 @@
 import { acquireDataDirectoryLock } from "./data-lock.ts";
-import { parseConfiguration, usage, type ServerConfiguration } from "./configuration.ts";
+import {
+  isLoopbackHost,
+  parseConfiguration,
+  usage,
+  type ServerConfiguration,
+} from "./configuration.ts";
 import { createHTTPServer } from "./http-server.ts";
 import { GenerationService, defaultProofreadingPrompt } from "./generation-service.ts";
-import { logError, logInfo } from "./log.ts";
+import { logError, logInfo, logWarn } from "./log.ts";
 import { NativeInference } from "./inference/native-inference.ts";
 
 export async function startServer(configuration: ServerConfiguration) {
@@ -16,6 +21,12 @@ export async function startServer(configuration: ServerConfiguration) {
     const app = createHTTPServer(service, configuration.token);
     service.start();
     const address = await app.listen({ host: configuration.host, port: configuration.port });
+    if (!isLoopbackHost(configuration.host))
+      logWarn("plain_http_non_loopback", {
+        host: configuration.host,
+        message:
+          "Plain HTTP on a non-loopback bind leaves tokens, audio, and transcripts unencrypted. Use a Tailscale address or an HTTPS reverse proxy.",
+      });
     let closing: Promise<void> | undefined;
     const close = () =>
       (closing ??= (async () => {

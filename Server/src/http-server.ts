@@ -71,7 +71,11 @@ export function createHTTPServer(service: GenerationService, token?: string) {
     (_request, body, done) => done(null, body),
   );
   app.addHook("onRequest", async (request) => {
-    if (token === undefined && !isLoopbackAuthority(request.headers.host)) {
+    if (
+      token === undefined &&
+      (!isLoopbackAuthority(request.headers.host) ||
+        !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress ?? ""))
+    ) {
       throw new ServiceError(
         403,
         "host_rejected",

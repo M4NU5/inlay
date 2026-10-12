@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir, hostname } from "node:os";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { parseConfiguration, usage } from "../src/configuration.ts";
+import { isLoopbackHost, parseConfiguration, usage } from "../src/configuration.ts";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`bun run dev [server arguments]\n\n${usage}`);
@@ -25,7 +25,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
   }
   const isMac = process.platform === "darwin";
   const environment = {
-    INLAY_SERVER_HOST: "0.0.0.0",
+    INLAY_SERVER_HOST: "127.0.0.1",
     INLAY_SERVER_PORT: "8392",
     INLAY_SERVER_TOKEN_FILE: tokenFile,
     INLAY_ENGINE_PATH: resolve(projectDirectory, "build/server/helpers/inlay-engine"),
@@ -47,7 +47,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
     INLAY_DEV: "1",
   };
   const configuration = await parseConfiguration(arguments_, environment);
-  const displayHost = hostname() === "siva" ? "siva.otter-hawksbill.ts.net" : hostname();
+  const displayHost = isLoopbackHost(configuration.host) ? "localhost" : configuration.host;
   console.log(`Development URL: http://${displayHost}:${configuration.port}/v1/liveness`);
   console.log(`Data: ${configuration.dataDirectory}\nToken file: ${tokenFile}`);
   console.log("Bun watches source changes. Missing helpers/models appear in health readiness.");

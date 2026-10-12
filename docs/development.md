@@ -11,7 +11,7 @@ bun run dev
 ```
 
 - Bun reloads source changes. Stop this foreground instance with Ctrl-C.
-- The default listener is `0.0.0.0:8392`; development data lives in `.local/dev-server/data`. This differs from the packaged Mac runner's port 8391 and `.local/server` archive.
+- The default listener is `127.0.0.1:8392` (pass `--host` or set `INLAY_SERVER_HOST`, Tailscale IP recommended, for another Mac to reach it); development data lives in `.local/dev-server/data`. This differs from the packaged Mac runner's port 8391 and `.local/server` archive.
 - The launcher ignores inherited `INLAY_SERVER_DATA_DIR` settings. Select another development archive explicitly with `--data-dir`.
 - A private token is created once at `.local/dev-server/token` and reused on reload. Do not print or commit its value. Use the token in the native client's server settings; `INLAY_SERVER_TOKEN_FILE` or `--token-file` can select an existing token file.
 - On the same Mac, open [server liveness](http://localhost:8392/v1/liveness) in the collaborative browser. For another machine, discover its current Tailscale hostname/address and use the selected port; follow [remote access](../Server/README.md#remote-access) for HTTPS and token setup.
