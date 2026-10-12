@@ -482,16 +482,16 @@ final class TriggerKeyRecorder: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self else { return event }
                 if event.keyCode == 53 {
-                    stop()
+                    self.stop()
                     return nil
                 }
                 if HoldKey.recordableKeyTitles[event.keyCode] != nil {
                     let code = Int(event.keyCode)
-                    stop()
+                    self.stop()
                     onCapture(code)
                     return nil
                 }
-                rejection = "That key types or is a modifier. Choose a function key (F1-F20), or Esc to cancel."
+                self.rejection = "That key types or is a modifier. Choose a function key (F1-F20), or Esc to cancel."
                 return nil
             }
         }
