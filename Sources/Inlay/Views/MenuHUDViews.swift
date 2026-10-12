@@ -21,7 +21,7 @@ struct InlayMenuView: View {
                 DevBadge()
                 Spacer(minLength: 8)
                 HStack(spacing: 6) {
-                    StatusDot(color: controller.isServerReady ? InlayPalette.success : InlayPalette.warning)
+                    StatusDot(isReady: controller.isServerReady)
                     Text(controller.serverStatusMessage)
                         .font(.caption)
                         .foregroundStyle(InlayPalette.muted)

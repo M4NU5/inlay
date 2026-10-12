@@ -107,7 +107,7 @@ struct ServerConnectionStatus: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            StatusDot(color: controller.isServerReady ? InlayPalette.success : InlayPalette.warning)
+            StatusDot(isReady: controller.isServerReady)
             Text(controller.serverStatusMessage)
                 .font(compact ? .caption : .callout)
                 .foregroundStyle(InlayPalette.ink)

@@ -4,7 +4,7 @@ import SwiftUI
 enum InlayPalette {
     // Glacier is the dark counterpart to Inlay's unchanged warm light palette.
     static let ink = adaptive(light: 0x352D3A, dark: 0xEDF5FA, contrastLight: 0x241E28, contrastDark: 0xFFFFFF)
-    static let muted = adaptive(light: 0x766D78, dark: 0xA4B8C7, contrastLight: 0x514955, contrastDark: 0xDAEAF5)
+    static let muted = adaptive(light: 0x6B6270, dark: 0xA4B8C7, contrastLight: 0x514955, contrastDark: 0xDAEAF5)
     static let faint = muted
     static let canvas = adaptive(light: 0xF8F6F2, dark: 0x1B252E)
     // Opaque equivalents of the mockup's raised glass layers keep long text legible.
@@ -18,7 +18,7 @@ enum InlayPalette {
     static let onAccent = adaptive(light: 0xFFFFFF, dark: 0x192C3A)
     static let glassTint = adaptive(light: 0xF8F6F2, dark: 0x223949)
     static let success = Color(nsColor: .systemGreen)
-    static let warning = Color(nsColor: .systemOrange)
+    static let warning = adaptive(light: 0xA65A00, dark: 0xFF9F0A, contrastLight: 0x8A4A00, contrastDark: 0xFFB340)
 
     private static func adaptive(light: UInt32, dark: UInt32, darkAlpha: CGFloat = 1,
                                  contrastLight: UInt32? = nil, contrastDark: UInt32? = nil) -> Color {
@@ -223,14 +223,23 @@ struct InlayFloatingSurface: ViewModifier {
 }
 
 struct StatusDot: View {
-    var color: Color
+    var isReady: Bool
     var size: CGFloat = 6
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
 
     var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
+        Group {
+            if differentiateWithoutColor {
+                Image(systemName: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(isReady ? InlayPalette.success : InlayPalette.warning)
+            } else {
+                Circle()
+                    .fill(isReady ? InlayPalette.success : InlayPalette.warning)
+                    .frame(width: size, height: size)
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 

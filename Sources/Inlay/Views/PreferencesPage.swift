@@ -312,7 +312,7 @@ struct ServerPreferencesPage: View {
                         .foregroundStyle(InlayPalette.muted)
                         .lineLimit(2)
                 }
-                StatusDot(color: runtime.ready ? InlayPalette.success : InlayPalette.warning)
+                StatusDot(isReady: runtime.ready)
             }
         }
     }
