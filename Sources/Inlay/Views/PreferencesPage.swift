@@ -20,6 +20,7 @@ private struct DevicePreferencesForm: View {
     @State private var deviceName = ""
     @State private var showingDiagnostics = false
     @State private var deviceToRevoke: DeviceSummary?
+    @StateObject private var triggerRecorder = TriggerKeyRecorder()
 
     private var usesPlainHTTP: Bool { (try? ServerEndpoint(endpoint))?.usesPlainHTTP ?? false }
 
@@ -89,10 +90,38 @@ private struct DevicePreferencesForm: View {
             } header: { Text("Connection").textCase(nil) }
 
             Section {
-                Picker("Dictation key", selection: $controller.shortcut) {
-                    ForEach(HoldKey.allCases) { key in Text(key.title).tag(key) }
+                Picker("Dictation key", selection: Binding<HoldKey?>(
+                    get: { controller.customTriggerKeyCode == nil ? controller.shortcut : nil },
+                    set: { if let key = $0 { controller.customTriggerKeyCode = nil; controller.shortcut = key } }
+                )) {
+                    ForEach(HoldKey.allCases) { key in
+                        if key == .fn { Text(key.title).tag(Optional(key)) }
+                        else { Text(key.title).tag(Optional(key)) }
+                    }
                 }
                 .accessibilityIdentifier("preferences.shortcut")
+                LabeledContent {
+                    HStack {
+                        if triggerRecorder.isRecording {
+                            Button("Cancel") { triggerRecorder.stop() }
+                        } else {
+                            Button("Record key") {
+                                triggerRecorder.start { code in controller.customTriggerKeyCode = code }
+                            }
+                            if controller.customTriggerKeyCode != nil {
+                                Button("Clear") { controller.customTriggerKeyCode = nil }
+                            }
+                        }
+                    }
+                } label: {
+                    Text(triggerRecorder.isRecording
+                        ? "Press a function key (Esc cancels)"
+                        : "Custom key: \(controller.customTriggerKeyCode.flatMap { HoldKey.customKeyTitle(CGKeyCode($0)) } ?? "None")")
+                }
+                .disabled(controller.isBusy)
+                if let rejection = triggerRecorder.rejection {
+                    Text(rejection).font(.caption).foregroundStyle(InlayPalette.warning)
+                }
                 Picker("Trigger", selection: $controller.activationMode) {
                     ForEach(HotkeyActivationMode.allCases) { mode in Text(mode.title).tag(mode) }
                 }
@@ -432,5 +461,45 @@ struct ServerPreferencesPage: View {
         guard let snapshot = controller.sharedPreferences else { return }
         base = snapshot
         draft = snapshot.preferences
+    }
+}
+
+
+/// Captures one function-key press for the custom trigger. Text-typing keys
+/// are rejected (with a message) instead of recorded, so an Escape press
+/// always cancels.
+@MainActor
+final class TriggerKeyRecorder: ObservableObject {
+    @Published var isRecording = false
+    @Published var rejection: String?
+    private var monitor: Any?
+
+    func start(onCapture: @escaping (Int) -> Void) {
+        stop()
+        isRecording = true
+        rejection = nil
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self else { return event }
+                if event.keyCode == 53 {
+                    stop()
+                    return nil
+                }
+                if HoldKey.recordableKeyTitles[event.keyCode] != nil {
+                    let code = Int(event.keyCode)
+                    stop()
+                    onCapture(code)
+                    return nil
+                }
+                rejection = "That key types or is a modifier. Choose a function key (F1-F20), or Esc to cancel."
+                return nil
+            }
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        isRecording = false
     }
 }

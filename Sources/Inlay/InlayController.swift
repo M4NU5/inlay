@@ -99,6 +99,16 @@ final class InlayController: ObservableObject {
             hotkey.key = shortcut
         }
     }
+    @Published var customTriggerKeyCode: Int? {
+        didSet {
+            if customTriggerKeyCode != oldValue { stopShortcutCheck() }
+            if !applyingConfiguration {
+                let code = customTriggerKeyCode
+                configuration.update { $0.customTriggerKeyCode = code }
+            }
+            hotkey.customKeyCode = customTriggerKeyCode.map { CGKeyCode($0) }
+        }
+    }
     @Published var activationMode: HotkeyActivationMode = .hold {
         didSet {
             guard activationMode != oldValue else { return }
@@ -163,7 +173,12 @@ final class InlayController: ObservableObject {
     var isBusy: Bool { activity.isBusy || !pendingDictations.isEmpty }
     var pendingDictationCount: Int { pendingDictations.count }
     var canCancelWithEscape: Bool { isCapturing && !hotkey.isHoldingFn }
-    var triggerKeyTitle: String { shortcut.title }
+    var triggerKeyTitle: String {
+        if let customTriggerKeyCode, let title = HoldKey.customKeyTitle(CGKeyCode(customTriggerKeyCode)) {
+            return title
+        }
+        return shortcut.title
+    }
     var isServerReady: Bool { serverHealth?.ready == true && serverHealth?.apiVersion == InlayAPI.version }
     var canTest: Bool { isServerReady && permissions.microphone && microphones.resolution.device != nil && !isCapturing }
     var selectedInputName: String { microphones.resolution.device?.name ?? "No microphone available" }
@@ -293,6 +308,7 @@ final class InlayController: ObservableObject {
         if launchAtLogin != settings.launchAtLogin { launchAtLogin = settings.launchAtLogin }
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
         if dictationSoundsEnabled != settings.dictationSoundsEnabled { dictationSoundsEnabled = settings.dictationSoundsEnabled }
+        if customTriggerKeyCode != settings.customTriggerKeyCode { customTriggerKeyCode = settings.customTriggerKeyCode }
         applyingConfiguration = false
     }
 

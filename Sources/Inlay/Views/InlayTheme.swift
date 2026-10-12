@@ -303,6 +303,7 @@ struct KeyCap: View {
 
 struct InlayHoldKeyCap: View {
     var key: HoldKey
+    var titleOverride: String?
     var isPressed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
@@ -313,8 +314,8 @@ struct InlayHoldKeyCap: View {
             shape.fill(InlayPalette.line)
                 .frame(height: 60)
                 .offset(y: 4)
-            Text(key.symbol)
-                .font(.system(size: key == .fn ? 27 : 30, weight: .regular))
+            Text(titleOverride ?? key.symbol)
+                .font(.system(size: titleOverride != nil ? 20 : (key == .fn ? 27 : 30), weight: .regular))
                 .foregroundStyle(InlayPalette.accentInk)
                 .frame(width: 64, height: 60)
                 .background(isPressed ? InlayPalette.tint : InlayPalette.surface, in: shape)
@@ -324,7 +325,7 @@ struct InlayHoldKeyCap: View {
         .frame(width: 64, height: 64)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: isPressed)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(key.title)
+        .accessibilityLabel(titleOverride ?? key.title)
         .accessibilityValue(isPressed ? "Pressed" : "Not pressed")
     }
 }

@@ -145,7 +145,9 @@ struct DictationPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 HStack(spacing: 20) {
-                    InlayHoldKeyCap(key: controller.shortcut, isPressed: controller.isRecording)
+                    InlayHoldKeyCap(key: controller.shortcut,
+                                    titleOverride: controller.customTriggerKeyCode.flatMap { HoldKey.customKeyTitle(CGKeyCode($0)) },
+                                    isPressed: controller.isRecording)
                     Text("\(controller.activationMode.actionVerb.capitalized) to dictate.")
                         .font(.system(size: 28, weight: .medium))
                         .tracking(-0.7)
