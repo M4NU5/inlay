@@ -8,22 +8,25 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public var activationMode: String
     public var launchAtLogin: Bool
     public var muteOutputWhileRecording: Bool
+    public var dictationSoundsEnabled: Bool
     public var microphones: MicrophonePreferences
 
     public static let `default` = InlayConfiguration()
 
     public init(holdKey: String = "rightOption", activationMode: String = "hold", launchAtLogin: Bool = false,
-                muteOutputWhileRecording: Bool = false, microphones: MicrophonePreferences = MicrophonePreferences()) {
+                muteOutputWhileRecording: Bool = false, dictationSoundsEnabled: Bool = true,
+                microphones: MicrophonePreferences = MicrophonePreferences()) {
         schemaVersion = 1
         self.holdKey = holdKey
         self.activationMode = activationMode
         self.launchAtLogin = launchAtLogin
         self.muteOutputWhileRecording = muteOutputWhileRecording
+        self.dictationSoundsEnabled = dictationSoundsEnabled
         self.microphones = microphones
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording, microphones
+        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording, dictationSoundsEnabled, microphones
     }
 
     public init(from decoder: Decoder) throws {
@@ -44,6 +47,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
                   activationMode: activationMode,
                   launchAtLogin: try values.value(Bool.self, for: .launchAtLogin, default: false),
                   muteOutputWhileRecording: try values.value(Bool.self, for: .muteOutputWhileRecording, default: false),
+                  dictationSoundsEnabled: try values.value(Bool.self, for: .dictationSoundsEnabled, default: true),
                   microphones: values.contains(.microphones)
                     ? try values.decode(StrictMicrophones.self, forKey: .microphones).preferences
                     : MicrophonePreferences())

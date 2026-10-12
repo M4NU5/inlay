@@ -119,6 +119,11 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.muteOutputWhileRecording = muteOutputWhileRecording } }
         }
     }
+    @Published var dictationSoundsEnabled = true {
+        didSet {
+            if !applyingConfiguration { configuration.update { $0.dictationSoundsEnabled = dictationSoundsEnabled } }
+        }
+    }
     @Published var statusMessage = "Connecting to server…"
     @Published private(set) var hudProgressText: String?
     @Published private(set) var serverHealth: ServerHealth?
@@ -280,6 +285,7 @@ final class InlayController: ObservableObject {
         if let mode = HotkeyActivationMode(rawValue: settings.activationMode), activationMode != mode { activationMode = mode }
         if launchAtLogin != settings.launchAtLogin { launchAtLogin = settings.launchAtLogin }
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
+        if dictationSoundsEnabled != settings.dictationSoundsEnabled { dictationSoundsEnabled = settings.dictationSoundsEnabled }
         applyingConfiguration = false
     }
 
@@ -1027,6 +1033,7 @@ final class InlayController: ObservableObject {
                 guard sessionID == current, activity == .starting, !Task.isCancelled else { return }
                 activity = .recording
                 statusMessage = "Listening"
+                announceOutcome("Listening", .start)
                 startRecordingTimer()
             } catch is CancellationError {
             } catch AudioRecordingError.cancelled {
@@ -1168,9 +1175,17 @@ final class InlayController: ObservableObject {
                     activity = delivered == .failed ? .failed : .success
                     if delivered.needsAttention { attentionPresented = true }
                     else { dismissHUDAfter(seconds: 1.7) }
+                    let outcomeSound: OutcomeFeedback.Sound =
+                        switch delivered {
+                        case .inserted, .tested, .listUpdated: .success
+                        case .copied, .unconfirmed: .attention
+                        case .failed, .none: .failure
+                        }
+                    announceOutcome(receipt.message ?? delivered.hudLabel, outcomeSound)
                 } else if delivered.needsAttention {
                     // A newer take owns the HUD and will replace this result.
                     errorMessage = "Earlier dictation: \(receipt.message ?? delivered.hudLabel)"
+                    if let errorMessage { announceOutcome(errorMessage, .attention) }
                 }
                 pending.resolved = true
                 refreshServer()
@@ -1198,7 +1213,7 @@ final class InlayController: ObservableObject {
                     lastDeliveryStatus = .failed
                     // An older job may fail while the microphone or a newer
                     // result owns the HUD. Keep that live activity intact.
-                    if !activity.isBusy { showError(message) }
+                    if !activity.isBusy { showError(message) } else { announceOutcome(message, .failure) }
                 }
                 refreshHistory()
             }
@@ -1338,10 +1353,15 @@ final class InlayController: ObservableObject {
         continuationAnchors = Array(continuationAnchors.suffix(8))
     }
 
+    private func announceOutcome(_ message: String, _ sound: OutcomeFeedback.Sound?) {
+        OutcomeFeedback.announce(message, sound: sound, soundsEnabled: dictationSoundsEnabled)
+    }
+
     private func showError(_ message: String) {
         hudProgressText = nil
         recordingFeedback.reset()
         activity = .failed; errorMessage = message; statusMessage = message
+        announceOutcome(message, .failure)
         onHUDVisibility?(true)
         dismissHUDAfter(seconds: 4)
     }

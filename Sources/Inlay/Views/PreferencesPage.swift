@@ -70,6 +70,11 @@ private struct DevicePreferencesForm: View {
                 }
                 Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
                     .accessibilityIdentifier("preferences.mute-output")
+                Text("Muting also silences VoiceOver and dictation sounds while recording.")
+                    .font(.caption)
+                    .foregroundStyle(InlayPalette.muted)
+                Toggle("Play dictation sounds", isOn: $controller.dictationSoundsEnabled)
+                    .accessibilityIdentifier("preferences.dictation-sounds")
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
                     Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
