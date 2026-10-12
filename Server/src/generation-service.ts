@@ -1235,6 +1235,7 @@ export class GenerationService {
           void this.mutate(() => this.progress(id, value));
         },
         signal,
+        record.inferenceAudio ? record.inferenceAudio.frameCount / 16000 : undefined,
       );
       transcribeMs = Math.round(performance.now() - transcribeStartedAt);
       signal.throwIfAborted();
