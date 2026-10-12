@@ -721,7 +721,19 @@ final class InlayController: ObservableObject {
     }
 
     private static func connectionMessage(_ error: Error) -> String {
-        if error is URLError { return "Server offline · Recording unavailable" }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .cannotFindHost, .dnsLookupFailed:
+                return "Server not found at this address · Recording unavailable"
+            case .timedOut:
+                return "Server connection timed out · Recording unavailable"
+            case .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
+                 .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .clientCertificateRejected:
+                return "Secure connection to the server failed · Recording unavailable"
+            default:
+                return "Server offline · Recording unavailable"
+            }
+        }
         return error.localizedDescription
     }
 
@@ -1068,7 +1080,7 @@ final class InlayController: ObservableObject {
         guard activity == .recording else { cancelDictation(); return }
         let releasedAt = ProcessInfo.processInfo.systemUptime
         destinationTask?.finish()
-        guard releasedAt - recordingStart >= 0.25 else { cancelDictation(); return }
+        guard releasedAt - recordingStart >= 0.25 else { cancelDictation(); showError("Too short — hold the key, speak, then release."); return }
         guard let id = activeGenerationID, let connection = activeClient, let uploadTask, let uploadPipe else {
             failSession("This recording has no server session.", cancelServer: true); return
         }
