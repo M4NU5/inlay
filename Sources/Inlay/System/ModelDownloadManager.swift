@@ -12,7 +12,10 @@ enum LocalServerPaths {
     }
     static var dataDirectory: URL { supportDirectory.appendingPathComponent("ServerData", isDirectory: true) }
     static var modelsDirectory: URL { supportDirectory.appendingPathComponent("Models", isDirectory: true) }
-    static var logsDirectory: URL { supportDirectory.appendingPathComponent("Logs", isDirectory: true) }
+    static var logsDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/Inlay", isDirectory: true)
+    }
     static var tokenFile: URL { dataDirectory.appendingPathComponent("admin-token") }
     static var markerFile: URL { dataDirectory.appendingPathComponent("local-server.json") }
     static var plistURL: URL {

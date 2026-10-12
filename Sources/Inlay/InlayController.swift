@@ -148,6 +148,8 @@ final class InlayController: ObservableObject {
     @Published private(set) var isSavingPreferences = false
     @Published private(set) var sharedPreferences: PreferencesSnapshot?
     @Published private(set) var storageUsage: StorageUsage?
+    let modelDownloads = ModelDownloadManager()
+    let localServer = LocalServerManager()
     @Published private(set) var generations: [GenerationRecord] = []
     @Published private(set) var undeliveredResults: [GenerationRecord] = []
     @Published private(set) var devices: [DeviceSummary] = []
@@ -292,6 +294,7 @@ final class InlayController: ObservableObject {
         configuration.$configuration.removeDuplicates().sink { [weak self] in self?.applyConfiguration($0) }.store(in: &subscriptions)
         guard startServices else { return }
         outputMuter.restorePersistedMute()
+        Task { [weak self] in await self?.localServer.detect() }
         bindServices()
         self.audioDevices.start()
         installLifecycleObservers()
@@ -800,6 +803,24 @@ final class InlayController: ObservableObject {
                 await refreshStorageUsage()
             } catch { errorMessage = error.localizedDescription }
         }
+    }
+
+    /// Connects this Mac to the app-managed local server after install:
+    /// saves the endpoint + admin token, then the normal health flow
+    /// auto-enrolls this Mac (stack 05) on the next refresh.
+    @discardableResult
+    func completeLocalSetup() -> Bool {
+        guard !isBusy, let token = localServer.adminToken() else { return false }
+        saveConnection(endpoint: ClientPreferencesStore.defaultEndpoint,
+                       token: token, deviceName: preferences.deviceName)
+        guard preferences.token == token else { return false }
+        refreshServer()
+        return true
+    }
+
+    func uninstallLocalServer() {
+        localServer.uninstall()
+        refreshServer()
     }
 
     func deleteGeneration(_ id: UUID) {

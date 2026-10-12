@@ -65,7 +65,12 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
         configureApplicationMenu()
         configureStatusItem()
         let defaults = UserDefaults.standard
-        if !defaults.bool(forKey: "hasLaunched") { initialPage = .device }
+        if !defaults.bool(forKey: "hasLaunched")
+            || (controller.preferences.endpoint == ClientPreferencesStore.defaultEndpoint
+                && controller.serverHealth == nil
+                && !LocalServerPaths.installedMarkerExists) {
+            initialPage = .device
+        }
         if reopenRequested || configuration.errorMessage != nil || !defaults.bool(forKey: "hasLaunched") || !controller.allPermissionsGranted {
             showWindow()
         }

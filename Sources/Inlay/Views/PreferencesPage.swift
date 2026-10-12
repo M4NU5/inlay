@@ -29,6 +29,10 @@ private struct DevicePreferencesForm: View {
     var body: some View {
         Form {
             Section {
+                if !InlayBuild.current.isDevelopment {
+                    LocalServerSetupSection(controller: controller)
+                    Divider()
+                }
                 TextField("Server address", text: $endpoint, prompt: Text("http://localhost:8391"))
                     .autocorrectionDisabled()
                     .accessibilityIdentifier("preferences.endpoint")
@@ -516,5 +520,80 @@ final class TriggerKeyRecorder: ObservableObject {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         isRecording = false
+    }
+}
+
+
+private struct LocalServerSetupSection: View {
+    @ObservedObject var controller: InlayController
+    @ObservedObject var downloads: ModelDownloadManager
+    @ObservedObject var server: LocalServerManager
+
+    init(controller: InlayController) {
+        self.controller = controller
+        downloads = controller.modelDownloads
+        server = controller.localServer
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            statusRow("Speech model", installed: downloads.speechStatus == .installed) {
+                downloads.downloadSpeechModel()
+            }
+            statusRow("Text model", installed: downloads.textStatus == .installed) {
+                downloads.downloadTextModel()
+            }
+            HStack {
+                Text("Local server")
+                Spacer()
+                switch server.state {
+                case .installed:
+                    Text("Installed").foregroundStyle(InlayPalette.success)
+                    Button("Use this server") { controller.completeLocalSetup() }
+                    Button("Uninstall") { controller.uninstallLocalServer() }
+                case .installing(let step):
+                    ProgressView().controlSize(.small)
+                    Text(step).foregroundStyle(InlayPalette.muted)
+                case .failed(let message):
+                    Text(message).foregroundStyle(InlayPalette.warning).lineLimit(2)
+                    Button("Try again") { Task { await server.install() } }
+                case .notInstalled:
+                    if server.portOccupiedByOther {
+                        Text("A server you set up yourself is already running. Connect to it below.")
+                            .font(.caption).foregroundStyle(InlayPalette.muted)
+                    } else {
+                        Button("Set up on this Mac") { Task { await server.install() } }
+                            .disabled(downloads.speechStatus != .installed || downloads.textStatus != .installed)
+                    }
+                }
+            }
+            if server.state == .installed, controller.serverHealth == nil {
+                Text("Installed but not reachable yet. It may still be starting; use Connect below, or check ~/Library/Logs/Inlay/server.log.")
+                    .font(.caption)
+                    .foregroundStyle(InlayPalette.warning)
+            }
+            if let error = downloads.errorMessage {
+                Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
+            }
+        }
+        .onAppear {
+            downloads.refreshStatus()
+            Task { await server.detect() }
+        }
+    }
+
+    private func statusRow(_ title: String, installed: Bool, download: @escaping () -> Void) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            if installed {
+                Text("Installed").foregroundStyle(InlayPalette.success)
+            } else if downloads.isDownloading {
+                ProgressView().controlSize(.small)
+                Button("Cancel") { downloads.cancelDownloads() }
+            } else {
+                Button("Download") { download() }
+            }
+        }
     }
 }
