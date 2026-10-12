@@ -936,11 +936,15 @@ final class InlayController: ObservableObject {
     @discardableResult
     private func beginDictation(isTest: Bool) -> Bool {
         guard !isCapturing, !isShuttingDown else { return false }
+        permissions = PermissionSnapshot.capture()
         stopShortcutCheck()
-        guard isServerReady else { showError(serverStatusMessage); refreshServer(); onShowWindow?(); return false }
-        guard permissions.microphone else { showError("Allow microphone access, then try again."); onShowWindow?(); return false }
+        guard isServerReady else { showError(serverStatusMessage); refreshServer(); return false }
+        guard permissions.microphone else { showError("Allow microphone access, then try again."); return false }
         guard let input = microphones.resolution.device, let deviceID = audioDevices.deviceID(for: input.uid) else {
-            showError("No microphone is available. Connect an input and try again."); onShowWindow?(); return false
+            showError("No microphone is available. Connect an input and try again."); return false
+        }
+        guard isTest || permissions.accessibility else {
+            showError("Allow Accessibility access so Inlay can insert text, then try again."); return false
         }
         hudTask?.cancel(); errorMessage = nil
         // Confirmed cursor moves matter only to takes that overlap them.
