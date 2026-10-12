@@ -6,6 +6,7 @@ struct InlayMenuView: View {
     @ObservedObject var controller: InlayController
     var openWindow: () -> Void
     var quit: () -> Void
+    var closeMenu: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -26,6 +27,20 @@ struct InlayMenuView: View {
                 .accessibilityIdentifier("server.status")
             }
             .frame(height: 28)
+
+            Button {
+                if !controller.isCapturing { closeMenu() }
+                controller.toggleMenuDictation()
+            } label: {
+                Label(controller.isCapturing ? "Stop dictation" : "Start dictation",
+                      systemImage: controller.isCapturing ? "stop.fill" : "mic")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: 26)
+            }
+            .disabled(!controller.canTest && !controller.isCapturing)
+            .help("Dictate at your cursor. Without a placed cursor, the text is copied.")
+            .accessibilityLabel(controller.isCapturing ? "Stop dictation" : "Start dictation")
+            .accessibilityIdentifier("menu.dictate")
 
             InlayMicrophoneTestButton(controller: controller, identifier: "menu.test")
             ForEach(controller.undeliveredResults, id: \.id) { record in

@@ -824,6 +824,12 @@ final class InlayController: ObservableObject {
         else { beginDictation(isTest: true) }
     }
 
+    func toggleMenuDictation() {
+        guard !hotkey.isHoldingFn else { return }
+        if isCapturing { finishDictation() }
+        else { beginDictation(isTest: false) }
+    }
+
     func cancelDictation() {
         guard isBusy else { return }
         if isCapturing {

@@ -169,7 +169,8 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
         popover.behavior = .transient
         menuContent = NSHostingController(rootView: InlayMenuView(
             controller: controller, openWindow: { [weak self] in self?.showWindow() },
-            quit: { NSApp.terminate(nil) }
+            quit: { NSApp.terminate(nil) },
+            closeMenu: { [weak self] in self?.popover?.performClose(nil) }
         ))
         // This compact menu has bounded status/preview slots. Keep its frame
         // stable while open, and remeasure current content on the next opening.
