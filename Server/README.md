@@ -73,6 +73,8 @@ Expected size: 2,497,281,120 bytes. SHA-256: `3605803b982cb64aead44f6c1b2ae36e3a
 
 ## Build
 
+Or run `./scripts/setup.sh` from the repository root to check prerequisites and perform the whole first build (submodules, dependencies, both models, server package).
+
 Install Bun 1.4.2 and initialize submodules with `git submodule update --init --recursive`. macOS requires Apple Silicon and full Xcode with its Metal compiler for the MLX helper; the complete client/helper build uses Xcode 26+ and Swift 6.2+. If Metal is missing, run `xcodebuild -downloadComponent MetalToolchain`.
 
 Linux requires Bun, a C/C++ toolchain, CMake, Git, curl, pkg-config, and libcurl development headers. Swift is not required. CUDA builds also need a compatible NVIDIA driver and CUDA toolkit. The [Dockerfile](Dockerfile) provides a pinned Ubuntu 24.04 build environment.
@@ -101,6 +103,8 @@ The archive lock uses Bun FFI to call libc `flock`, matching the reference Swift
 `INLAY_BUILD_JOBS` controls build concurrency. For another CPU/GPU host, use `INLAY_NATIVE=OFF` and set `INLAY_CUDA_ARCHITECTURES` for the destination GPU. CPU support is useful for portable builds; validate CUDA support, memory, and dictation latency on the selected host.
 
 ## Run
+
+On macOS, `./scripts/install-service.sh` installs the packaged server as a per-user LaunchAgent (`Server/dev.davis.inlay.server-agent.plist`), creates `~/Library/Application Support/Inlay/ServerData` (mode 700) and the admin token file inside it, and verifies `http://127.0.0.1:8391/v1/liveness`. Remove it with `./scripts/install-service.sh --uninstall`; data and models are kept, and existing data directories are reused, never moved. `./scripts/migrate.sh` prints the checklist for moving from a dev checkout to the Release service.
 
 From the repository root, with the models installed above:
 
