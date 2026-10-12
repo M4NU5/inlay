@@ -12,6 +12,9 @@ public import struct Foundation.Date
 public import Foundation
 /// A type that performs HTTP operations defined by the OpenAPI document.
 public protocol APIProtocol: Sendable {
+    /// - Remark: HTTP `GET /v1/liveness`.
+    /// - Remark: Generated from `#/paths//v1/liveness/get(getLiveness)`.
+    func getLiveness(_ input: Operations.GetLiveness.Input) async throws -> Operations.GetLiveness.Output
     /// - Remark: HTTP `GET /v1/health`.
     /// - Remark: Generated from `#/paths//v1/health/get(getHealth)`.
     func getHealth(_ input: Operations.GetHealth.Input) async throws -> Operations.GetHealth.Output
@@ -78,6 +81,11 @@ public protocol APIProtocol: Sendable {
 
 /// Convenience overloads for operation inputs.
 extension APIProtocol {
+    /// - Remark: HTTP `GET /v1/liveness`.
+    /// - Remark: Generated from `#/paths//v1/liveness/get(getLiveness)`.
+    public func getLiveness(headers: Operations.GetLiveness.Input.Headers = .init()) async throws -> Operations.GetLiveness.Output {
+        try await getLiveness(Operations.GetLiveness.Input(headers: headers))
+    }
     /// - Remark: HTTP `GET /v1/health`.
     /// - Remark: Generated from `#/paths//v1/health/get(getHealth)`.
     public func getHealth(headers: Operations.GetHealth.Input.Headers = .init()) async throws -> Operations.GetHealth.Output {

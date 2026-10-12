@@ -96,7 +96,7 @@ case "$action" in
         if is_running; then
             use_running_port
             printf 'Dev server PID %s: http://localhost:%s\n' "$server_pid" "$server_port"
-            curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:$server_port/v1/health"
+            curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:$server_port/v1/liveness"
             printf '\n'
         else
             printf 'The dev server is stopped.\n'
@@ -158,7 +158,7 @@ for ((attempt = 0; attempt < 100; attempt++)); do
         printf 'The dev server exited during startup. See %s.\n' "$log_file" >&2
         exit 1
     fi
-    if curl --fail --silent --max-time 1 "http://127.0.0.1:$server_port/v1/health" > /dev/null; then
+    if curl --fail --silent --max-time 1 "http://127.0.0.1:$server_port/v1/liveness" > /dev/null; then
         printf 'Dev server: http://localhost:%s (PID %s)\nLog: %s\n' "$server_port" "$server_pid" "$log_file"
         launch_client
         exit 0

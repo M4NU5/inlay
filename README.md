@@ -58,7 +58,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-This listens on `0.0.0.0:8392`, uses `.local/dev-server/data`, and creates a private token file at `.local/dev-server/token`. Set the model-path exports above and build the native helpers once with `./scripts/build-server.sh` for dictation. Without helpers/models, the server still starts and health reports unavailable inference. On the same Mac, open [server health](http://localhost:8392/v1/health).
+This listens on `0.0.0.0:8392`, uses `.local/dev-server/data`, and creates a private token file at `.local/dev-server/token`. Set the model-path exports above and build the native helpers once with `./scripts/build-server.sh` for dictation. Without helpers/models, the server still starts and health reports unavailable inference. On the same Mac, open [server liveness](http://localhost:8392/v1/liveness).
 
 ```sh
 bun run fmt

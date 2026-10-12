@@ -15,6 +15,19 @@ x-inlay-maximumChunkBytes: 1048576
 x-inlay-maximumArtifactBytes: 8388608
 x-inlay-maximumDictionaryBytes: 8388608
 paths:
+  "/v1/liveness":
+    get:
+      operationId: "getLiveness"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/LivenessResponse"
+        default:
+          "$ref": "#/components/responses/APIError"
+      security: []
   "/v1/health":
     get:
       operationId: "getHealth"
@@ -27,7 +40,6 @@ paths:
                 "$ref": "#/components/schemas/ServerHealth"
         default:
           "$ref": "#/components/responses/APIError"
-      security: []
   "/v1/preferences":
     get:
       operationId: "getPreferences"
@@ -686,6 +698,14 @@ components:
         - "modelID"
         - "backend"
         - "ready"
+    LivenessResponse:
+      type: "object"
+      additionalProperties: false
+      properties:
+        status:
+          type: "string"
+      required:
+        - "status"
     ServerHealth:
       type: "object"
       additionalProperties: false

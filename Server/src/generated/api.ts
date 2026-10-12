@@ -1,4 +1,20 @@
 export interface paths {
+  "/v1/liveness": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["getLiveness"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/health": {
     parameters: {
       query?: never;
@@ -365,6 +381,9 @@ export interface components {
       ready: boolean;
       message?: string;
     };
+    LivenessResponse: {
+      status: string;
+    };
     ServerHealth: {
       apiVersion: number;
       serverVersion: string;
@@ -578,6 +597,27 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  getLiveness: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Success */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["LivenessResponse"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
   getHealth: {
     parameters: {
       query?: never;

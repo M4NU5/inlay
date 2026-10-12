@@ -126,7 +126,7 @@ From the repository root, with the models installed above:
 
 On Linux, replace the last path with the GGUF file. Add `--dev` for a development label in health responses. If using the packaged distribution elsewhere, point helper/resource paths at that package and choose durable model/data paths.
 
-Check `curl http://localhost:8391/v1/health`; HTTP reachability alone does not mean inference is available. The `ready` field means the server can accept a recording, including while other recordings are uploading or processing. Finished uploads queue for serial inference; model runtime fields separately report whether helpers are loaded. Quitting a client does not stop this process. Use launchd, systemd, or container supervision for boot/restart behavior; the scripts do not install a service.
+Check `curl http://localhost:8391/v1/liveness` for reachability; for readiness detail use the app, or `curl -H "Authorization: Bearer <token>" http://localhost:8391/v1/health`. HTTP reachability alone does not mean inference is available. The `ready` field means the server can accept a recording, including while other recordings are uploading or processing. Finished uploads queue for serial inference; model runtime fields separately report whether helpers are loaded. Quitting a client does not stop this process. Use launchd, systemd, or container supervision for boot/restart behavior; the scripts do not install a service.
 
 For server-only development alongside an installed Inlay instance, use `--port 8392 --data-dir "$PWD/.local/typescript-server" --dev` with your helper/model arguments. Start the executable directly or use `bun run dev:server` with those arguments. The client dev runner starts the app and defaults to port 8391; avoid it when preserving a running installation.
 
@@ -184,7 +184,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-The source server hot reloads, listens on `0.0.0.0:8392`, and keeps data and its automatically created private token under `.local/dev-server`. On the same Mac, open [server health](http://localhost:8392/v1/health). Build helpers once with `./scripts/build-server.sh` and set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` to enable dictation. Missing assets leave the server running with `ready: false`; HTTP reachability does not establish working inference. CLI arguments and the environment variables above override development defaults, except that inherited `INLAY_SERVER_DATA_DIR` is ignored. Use `--data-dir` to explicitly select another development archive.
+The source server hot reloads, listens on `0.0.0.0:8392`, and keeps data and its automatically created private token under `.local/dev-server`. On the same Mac, open [server liveness](http://localhost:8392/v1/liveness). Build helpers once with `./scripts/build-server.sh` and set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` to enable dictation. Missing assets leave the server running with `ready: false`; HTTP reachability does not establish working inference. CLI arguments and the environment variables above override development defaults, except that inherited `INLAY_SERVER_DATA_DIR` is ignored. Use `--data-dir` to explicitly select another development archive.
 
 ```sh
 bun run fmt

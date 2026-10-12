@@ -48,7 +48,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
   };
   const configuration = await parseConfiguration(arguments_, environment);
   const displayHost = hostname() === "siva" ? "siva.otter-hawksbill.ts.net" : hostname();
-  console.log(`Development URL: http://${displayHost}:${configuration.port}/v1/health`);
+  console.log(`Development URL: http://${displayHost}:${configuration.port}/v1/liveness`);
   console.log(`Data: ${configuration.dataDirectory}\nToken file: ${tokenFile}`);
   console.log("Bun watches source changes. Missing helpers/models appear in health readiness.");
   const child = Bun.spawn(

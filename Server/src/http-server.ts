@@ -79,7 +79,7 @@ export function createHTTPServer(service: GenerationService, token?: string) {
       );
     }
     if (
-      request.url.split("?")[0] !== "/v1/health" &&
+      request.url.split("?")[0] !== "/v1/liveness" &&
       token !== undefined &&
       !equal(request.headers.authorization ?? "", `Bearer ${token}`)
     ) {
@@ -129,6 +129,7 @@ export function createHTTPServer(service: GenerationService, token?: string) {
     reply.code(404).send({ code: "http_404", message: "Not found." }),
   );
 
+  app.get("/v1/liveness", () => ({ status: "ok" }));
   app.get("/v1/health", () => service.health());
   app.get("/v1/preferences", () => service.getPreferences());
   app.put("/v1/preferences", (request) =>

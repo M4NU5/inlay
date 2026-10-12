@@ -452,6 +452,31 @@ extension Components {
                 ])
             }
         }
+        /// - Remark: Generated from `#/components/schemas/LivenessResponse`.
+        public struct LivenessResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/LivenessResponse/status`.
+            public var status: Swift.String
+            /// Creates a new `LivenessResponse`.
+            ///
+            /// - Parameters:
+            ///   - status:
+            public init(status: Swift.String) {
+                self.status = status
+            }
+            public enum CodingKeys: String, CodingKey {
+                case status
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.status = try container.decode(
+                    Swift.String.self,
+                    forKey: .status
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "status"
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/ServerHealth`.
         public struct ServerHealth: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/ServerHealth/apiVersion`.
