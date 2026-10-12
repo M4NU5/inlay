@@ -86,7 +86,9 @@ final class InlayController: ObservableObject {
     @Published private(set) var storageUsage: StorageUsage?
     let modelDownloads = ModelDownloadManager()
     let localServer = LocalServerManager()
-    @Published private(set) var generations: [GenerationRecord] = []
+    @Published private(set) var generations: [GenerationSummary] = []
+    @Published private(set) var generationDetail: GenerationRecord?
+    private var detailTask: Task<Void, Never>?
     @Published private(set) var undeliveredResults: [GenerationRecord] = []
     @Published private(set) var devices: [DeviceSummary] = []
     @Published private(set) var legacyEnrollmentClosed = false
@@ -475,10 +477,8 @@ final class InlayController: ObservableObject {
             guard let self else { return }
             do {
                 try await client().deleteAudio(id)
-                if let index = generations.firstIndex(where: { $0.id == id }) {
-                    generations[index].inferenceAudio = nil
-                    generations[index].originalAudio = nil
-                } else { refreshHistory() }
+                if generationDetail?.id == id { generationDetail = nil; loadGenerationDetail(id) }
+                refreshHistory()
                 await refreshStorageUsage()
             } catch { errorMessage = error.localizedDescription }
         }
@@ -500,6 +500,22 @@ final class InlayController: ObservableObject {
     func uninstallLocalServer() {
         localServer.uninstall()
         refreshServer()
+    }
+
+    /// Loads the full record for the history detail pane (summaries stay in the list).
+    func loadGenerationDetail(_ id: UUID?) {
+        detailTask?.cancel()
+        generationDetail = nil
+        guard let id else { return }
+        detailTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let record = try await client().generation(id)
+                guard !Task.isCancelled else { return }
+                generationDetail = record
+            } catch is CancellationError {
+            } catch { if !Task.isCancelled { errorMessage = error.localizedDescription } }
+        }
     }
 
     func deleteGeneration(_ id: UUID) {

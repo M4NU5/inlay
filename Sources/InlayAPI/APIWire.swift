@@ -59,6 +59,7 @@ extension WisprFlowKnownIDsResponse: APIWireModel { public typealias Wire = Comp
 extension WisprFlowDictionaryArchiveReceipt: APIWireModel { public typealias Wire = Components.Schemas.WisprFlowDictionaryArchiveReceipt }
 extension ImportedSource: APIWireModel { public typealias Wire = Components.Schemas.ImportedSource }
 extension GenerationRecord: APIWireModel { public typealias Wire = Components.Schemas.GenerationRecord }
+extension GenerationSummary: APIWireModel { public typealias Wire = Components.Schemas.GenerationSummary }
 extension GenerationPage: APIWireModel { public typealias Wire = Components.Schemas.GenerationPage }
 extension APIErrorResponse: APIWireModel { public typealias Wire = Components.Schemas.APIErrorResponse }
 extension DictionaryEntry: APIWireModel { public typealias Wire = Components.Schemas.DictionaryEntry }

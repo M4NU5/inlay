@@ -15,10 +15,10 @@ struct HistoryPage: View {
         var seen = Set<String>()
         return controller.generations.map(\.device).filter { seen.insert($0.id).inserted }.sorted { $0.name < $1.name }
     }
-    private var filtered: [GenerationRecord] {
+    private var filtered: [GenerationSummary] {
         controller.generations.filter { deviceID == "all" || $0.device.id == deviceID }
     }
-    private var selected: GenerationRecord? {
+    private var selected: GenerationSummary? {
         filtered.first { $0.id == selectedID }
     }
 
@@ -83,6 +83,7 @@ struct HistoryPage: View {
         }
         .padding(26)
         .onAppear { controller.refreshHistory() }
+        .onChange(of: selectedID) { _, id in controller.loadGenerationDetail(id) }
         .onChange(of: controller.historySourceFilter) { _, _ in
             deviceID = "all"
             selectedID = nil
@@ -159,7 +160,8 @@ struct HistoryPage: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if let selected {
+        if let summary = selected {
+            if let selected = controller.generationDetail, selected.id == summary.id {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text(selected.createdAt, format: .dateTime.month(.wide).day().hour().minute()).font(.headline)
@@ -305,13 +307,17 @@ struct HistoryPage: View {
             .padding(.leading, 20)
             .padding(.top, 8)
             .accessibilityIdentifier("history.detail")
+            } else {
+                ProgressView("Loading dictation…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else {
             ContentUnavailableView("Select a dictation", systemImage: "text.alignleft")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private func accessibilityText(_ generation: GenerationRecord) -> String {
+    private func accessibilityText(_ generation: GenerationSummary) -> String {
         let base = "\(sourceLabel(generation)), \(summary(generation))"
         return generation.status == .failed || generation.status == .cancelled
             ? "\(statusLabel(generation.status)), \(base)" : base
@@ -333,8 +339,12 @@ struct HistoryPage: View {
         generation.importedSource == nil ? generation.device.name : "Imported from Wispr Flow"
     }
 
-    private func summary(_ generation: GenerationRecord) -> String {
-        if !generation.finalText.isEmpty { return generation.finalText }
+    private func sourceLabel(_ generation: GenerationSummary) -> String {
+        generation.importedSource == nil ? generation.device.name : "Imported from Wispr Flow"
+    }
+
+    private func summary(_ generation: GenerationSummary) -> String {
+        if !generation.previewText.isEmpty { return generation.previewText }
         return generation.importedSource == nil ? statusLabel(generation.status) : "No transcript recovered"
     }
 

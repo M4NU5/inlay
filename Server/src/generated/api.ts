@@ -720,8 +720,22 @@ export interface components {
       queuePosition?: number;
       importedSource?: components["schemas"]["ImportedSource"];
     };
+    GenerationSummary: {
+      id: components["schemas"]["UUID"];
+      device: components["schemas"]["DeviceIdentity"];
+      mode: components["schemas"]["GenerationMode"];
+      status: components["schemas"]["GenerationStatus"];
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      updatedAt: string;
+      previewText: string;
+      queuePosition?: number;
+      originalAudioOmittedReason?: string;
+      importedSource?: components["schemas"]["ImportedSource"];
+    };
     GenerationPage: {
-      items: components["schemas"]["GenerationRecord"][];
+      items: components["schemas"]["GenerationSummary"][];
       nextCursor?: string;
     };
     WisprFlowImportResult: {

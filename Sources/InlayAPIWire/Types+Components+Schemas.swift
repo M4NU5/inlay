@@ -2576,10 +2576,136 @@ extension Components {
                 ])
             }
         }
+        /// - Remark: Generated from `#/components/schemas/GenerationSummary`.
+        public struct GenerationSummary: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/id`.
+            public var id: Components.Schemas.Uuid
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/device`.
+            public var device: Components.Schemas.DeviceIdentity
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/mode`.
+            public var mode: Components.Schemas.GenerationMode
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/status`.
+            public var status: Components.Schemas.GenerationStatus
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/createdAt`.
+            public var createdAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/updatedAt`.
+            public var updatedAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/previewText`.
+            public var previewText: Swift.String
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/queuePosition`.
+            public var queuePosition: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/originalAudioOmittedReason`.
+            public var originalAudioOmittedReason: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/GenerationSummary/importedSource`.
+            public var importedSource: Components.Schemas.ImportedSource?
+            /// Creates a new `GenerationSummary`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - device:
+            ///   - mode:
+            ///   - status:
+            ///   - createdAt:
+            ///   - updatedAt:
+            ///   - previewText:
+            ///   - queuePosition:
+            ///   - originalAudioOmittedReason:
+            ///   - importedSource:
+            public init(
+                id: Components.Schemas.Uuid,
+                device: Components.Schemas.DeviceIdentity,
+                mode: Components.Schemas.GenerationMode,
+                status: Components.Schemas.GenerationStatus,
+                createdAt: Foundation.Date,
+                updatedAt: Foundation.Date,
+                previewText: Swift.String,
+                queuePosition: Swift.Int? = nil,
+                originalAudioOmittedReason: Swift.String? = nil,
+                importedSource: Components.Schemas.ImportedSource? = nil
+            ) {
+                self.id = id
+                self.device = device
+                self.mode = mode
+                self.status = status
+                self.createdAt = createdAt
+                self.updatedAt = updatedAt
+                self.previewText = previewText
+                self.queuePosition = queuePosition
+                self.originalAudioOmittedReason = originalAudioOmittedReason
+                self.importedSource = importedSource
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case device
+                case mode
+                case status
+                case createdAt
+                case updatedAt
+                case previewText
+                case queuePosition
+                case originalAudioOmittedReason
+                case importedSource
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.id = try container.decode(
+                    Components.Schemas.Uuid.self,
+                    forKey: .id
+                )
+                self.device = try container.decode(
+                    Components.Schemas.DeviceIdentity.self,
+                    forKey: .device
+                )
+                self.mode = try container.decode(
+                    Components.Schemas.GenerationMode.self,
+                    forKey: .mode
+                )
+                self.status = try container.decode(
+                    Components.Schemas.GenerationStatus.self,
+                    forKey: .status
+                )
+                self.createdAt = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .createdAt
+                )
+                self.updatedAt = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .updatedAt
+                )
+                self.previewText = try container.decode(
+                    Swift.String.self,
+                    forKey: .previewText
+                )
+                self.queuePosition = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .queuePosition
+                )
+                self.originalAudioOmittedReason = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .originalAudioOmittedReason
+                )
+                self.importedSource = try container.decodeIfPresent(
+                    Components.Schemas.ImportedSource.self,
+                    forKey: .importedSource
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "id",
+                    "device",
+                    "mode",
+                    "status",
+                    "createdAt",
+                    "updatedAt",
+                    "previewText",
+                    "queuePosition",
+                    "originalAudioOmittedReason",
+                    "importedSource"
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/GenerationPage`.
         public struct GenerationPage: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/GenerationPage/items`.
-            public var items: [Components.Schemas.GenerationRecord]
+            public var items: [Components.Schemas.GenerationSummary]
             /// - Remark: Generated from `#/components/schemas/GenerationPage/nextCursor`.
             public var nextCursor: Swift.String?
             /// Creates a new `GenerationPage`.
@@ -2588,7 +2714,7 @@ extension Components {
             ///   - items:
             ///   - nextCursor:
             public init(
-                items: [Components.Schemas.GenerationRecord],
+                items: [Components.Schemas.GenerationSummary],
                 nextCursor: Swift.String? = nil
             ) {
                 self.items = items
@@ -2601,7 +2727,7 @@ extension Components {
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 self.items = try container.decode(
-                    [Components.Schemas.GenerationRecord].self,
+                    [Components.Schemas.GenerationSummary].self,
                     forKey: .items
                 )
                 self.nextCursor = try container.decodeIfPresent(

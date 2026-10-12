@@ -89,8 +89,9 @@ export type ImportedSource = Schemas["ImportedSource"];
 export type GenerationRecord = Omit<Schemas["GenerationRecord"], "settings"> & {
   settings: PreferencesSnapshot;
 };
+export type GenerationSummary = Schemas["GenerationSummary"];
 export type GenerationPage = Omit<Schemas["GenerationPage"], "items"> & {
-  items: GenerationRecord[];
+  items: GenerationSummary[];
 };
 export type WisprFlowImportResult = Omit<Schemas["WisprFlowImportResult"], "record"> & {
   record: GenerationRecord;

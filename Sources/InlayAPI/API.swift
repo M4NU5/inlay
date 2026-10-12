@@ -415,10 +415,33 @@ public struct GenerationRecord: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// History list projection (API 4): full records load via GET /v1/generations/:id.
+public struct GenerationSummary: Codable, Equatable, Sendable, Identifiable {
+    public var id: UUID
+    public var device: DeviceIdentity
+    public var mode: GenerationMode
+    public var status: GenerationStatus
+    public var createdAt: Date
+    public var updatedAt: Date
+    public var previewText: String
+    public var queuePosition: Int?
+    public var originalAudioOmittedReason: String?
+    public var importedSource: ImportedSource?
+    public init(id: UUID, device: DeviceIdentity, mode: GenerationMode, status: GenerationStatus,
+                createdAt: Date, updatedAt: Date, previewText: String, queuePosition: Int? = nil,
+                originalAudioOmittedReason: String? = nil, importedSource: ImportedSource? = nil) {
+        self.id = id; self.device = device; self.mode = mode; self.status = status
+        self.createdAt = createdAt; self.updatedAt = updatedAt; self.previewText = previewText
+        self.queuePosition = queuePosition
+        self.originalAudioOmittedReason = originalAudioOmittedReason
+        self.importedSource = importedSource
+    }
+}
+
 public struct GenerationPage: Codable, Sendable {
-    public var items: [GenerationRecord]
+    public var items: [GenerationSummary]
     public var nextCursor: String?
-    public init(items: [GenerationRecord], nextCursor: String? = nil) { self.items = items; self.nextCursor = nextCursor }
+    public init(items: [GenerationSummary], nextCursor: String? = nil) { self.items = items; self.nextCursor = nextCursor }
 }
 
 public struct APIErrorResponse: Codable, Sendable {

@@ -14,6 +14,7 @@ import type {
   DictationContinuation,
   FinishGenerationRequest,
   GenerationPage,
+  GenerationSummary,
   GenerationRecord,
   PreferencesSnapshot,
   ServerHealth,
@@ -77,6 +78,23 @@ const graphemes = (text: string) =>
 import { DEFAULT_PROOFREADING_PROMPT } from "./generated/shared.ts";
 
 export const defaultProofreadingPrompt = DEFAULT_PROOFREADING_PROMPT;
+// History pages carry the list projection only; full records come from
+// GET /v1/generations/:id. Optional fields stay omitted, never null.
+const summarizeGeneration = (record: GenerationRecord): GenerationSummary => ({
+  id: record.id,
+  device: record.device,
+  mode: record.mode,
+  status: record.status,
+  createdAt: record.createdAt,
+  updatedAt: record.updatedAt,
+  previewText: record.previewText,
+  ...(record.queuePosition !== undefined ? { queuePosition: record.queuePosition } : {}),
+  ...(record.originalAudioOmittedReason !== undefined
+    ? { originalAudioOmittedReason: record.originalAudioOmittedReason }
+    : {}),
+  ...(record.importedSource !== undefined ? { importedSource: record.importedSource } : {}),
+});
+
 export const defaultPreferences = (): PreferencesSnapshot => ({
   revision: 0,
   preferences: {
@@ -1022,7 +1040,7 @@ export class GenerationService {
     }
     const items = sorted.slice(start, start + limit);
     return {
-      items: items.map((item) => this.decorate(copy(item))),
+      items: items.map((item) => summarizeGeneration(this.decorate(copy(item)))),
       nextCursor: start + items.length < sorted.length ? items.at(-1)?.id : undefined,
     };
   }
