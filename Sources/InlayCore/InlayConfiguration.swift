@@ -40,8 +40,8 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
             throw values.invalid(.holdKey, "Use rightOption, rightControl, or fn.")
         }
         let activationMode = try values.value(String.self, for: .activationMode, default: "hold")
-        guard ["hold", "doubleTap"].contains(activationMode) else {
-            throw values.invalid(.activationMode, "Use hold or doubleTap.")
+        guard ["hold", "doubleTap", "tapToggle"].contains(activationMode) else {
+            throw values.invalid(.activationMode, "Use hold, doubleTap, or tapToggle.")
         }
         self.init(holdKey: holdKey,
                   activationMode: activationMode,

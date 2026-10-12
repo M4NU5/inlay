@@ -97,6 +97,11 @@ private struct DevicePreferencesForm: View {
                     ForEach(HotkeyActivationMode.allCases) { mode in Text(mode.title).tag(mode) }
                 }
                 .accessibilityIdentifier("preferences.activation")
+                if controller.activationMode == .tapToggle {
+                    Text("Recording continues until you tap again, press the stop button, or reach 3 minutes.")
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.muted)
+                }
                 LabeledContent {
                     Button(controller.isCheckingShortcut ? "Stop checking" : "Check shortcut") {
                         if controller.isCheckingShortcut { controller.stopShortcutCheck() }

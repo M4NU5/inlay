@@ -50,7 +50,7 @@ enum InlayBrand {
         case .delivering: description = "\(InlayBuild.current.displayName) — delivering your words"
         case .failed: description = "\(InlayBuild.current.displayName) — dictation needs attention"
         case .idle, .success:
-            let verb = activationMode == .doubleTapToggle ? "double tap" : "hold"
+            let verb = activationMode.actionVerb
             description = "\(InlayBuild.current.displayName) — \(verb) \(shortcut.title) to dictate"
         }
         button.toolTip = description
