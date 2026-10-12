@@ -12,8 +12,7 @@ Inlay's native Swift macOS client handles microphone capture, shortcuts, and cur
 | `Sources/InlayAPIWire`    | Generated Swift transport types used through the API facade.                                |
 | `Server/api/openapi.yaml` | Language-neutral HTTP and wire-model contract.                                              |
 | `Server/src`              | Packaged TypeScript HTTP server, durable coordinator, text pipeline, and helper management. |
-| `Sources/InlayDomain`     | Dictionary, list formatting, rewrite validation, and composition.                           |
-| `Sources/InlayServerKit`  | Reference Swift server retained for source comparison.                                      |
+| `Sources/InlayDomain`     | Dictionary and record-embedded wire types shared with the client.                           |
 | `Sources/InlayServer`     | Reference Swift server command-line entry point.                                            |
 | `Engine`                  | Persistent Parakeet speech helper (vendored whisper.cpp); Metal on Mac, CPU/CUDA on Linux.  |
 | `TextEngine`              | Persistent Qwen helper; Swift MLX on Mac, llama.cpp on Linux.                               |
