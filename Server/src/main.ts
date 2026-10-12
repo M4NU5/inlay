@@ -15,10 +15,14 @@ export async function startServer(configuration: ServerConfiguration) {
   let service: GenerationService | undefined;
   try {
     service = await GenerationService.open(
-      configuration,
+      {
+        dataDirectory: configuration.dataDirectory,
+        development: configuration.development,
+        adminToken: configuration.token,
+      },
       new NativeInference(configuration.inference),
     );
-    const app = createHTTPServer(service, configuration.token);
+    const app = createHTTPServer(service);
     service.start();
     const address = await app.listen({ host: configuration.host, port: configuration.port });
     if (!isLoopbackHost(configuration.host))
@@ -57,7 +61,10 @@ if (import.meta.main) {
     else if (process.argv.includes("--print-default-proofreading-prompt"))
       console.log(defaultProofreadingPrompt);
     else {
-      const server = await startServer(await parseConfiguration());
+      const configuration = await parseConfiguration();
+      const server = await startServer(configuration);
+      if (configuration.adminTokenCreated)
+        logInfo("admin_token_created", { file: configuration.adminTokenFile });
       logInfo("server_listening", { address: server.address });
       const stop = () => {
         void server.close().then(

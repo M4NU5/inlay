@@ -24,6 +24,18 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PUT /v1/preferences`.
     /// - Remark: Generated from `#/paths//v1/preferences/put(updatePreferences)`.
     func updatePreferences(_ input: Operations.UpdatePreferences.Input) async throws -> Operations.UpdatePreferences.Output
+    /// - Remark: HTTP `POST /v1/devices/enroll`.
+    /// - Remark: Generated from `#/paths//v1/devices/enroll/post(enrollDevice)`.
+    func enrollDevice(_ input: Operations.EnrollDevice.Input) async throws -> Operations.EnrollDevice.Output
+    /// - Remark: HTTP `GET /v1/devices`.
+    /// - Remark: Generated from `#/paths//v1/devices/get(listDevices)`.
+    func listDevices(_ input: Operations.ListDevices.Input) async throws -> Operations.ListDevices.Output
+    /// - Remark: HTTP `POST /v1/devices/close-legacy-enrollment`.
+    /// - Remark: Generated from `#/paths//v1/devices/close-legacy-enrollment/post(closeLegacyEnrollment)`.
+    func closeLegacyEnrollment(_ input: Operations.CloseLegacyEnrollment.Input) async throws -> Operations.CloseLegacyEnrollment.Output
+    /// - Remark: HTTP `DELETE /v1/devices/{id}`.
+    /// - Remark: Generated from `#/paths//v1/devices/{id}/delete(revokeDevice)`.
+    func revokeDevice(_ input: Operations.RevokeDevice.Input) async throws -> Operations.RevokeDevice.Output
     /// - Remark: HTTP `GET /v1/generations`.
     /// - Remark: Generated from `#/paths//v1/generations/get(listGenerations)`.
     func listGenerations(_ input: Operations.ListGenerations.Input) async throws -> Operations.ListGenerations.Output
@@ -105,6 +117,38 @@ extension APIProtocol {
         try await updatePreferences(Operations.UpdatePreferences.Input(
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /v1/devices/enroll`.
+    /// - Remark: Generated from `#/paths//v1/devices/enroll/post(enrollDevice)`.
+    public func enrollDevice(
+        headers: Operations.EnrollDevice.Input.Headers = .init(),
+        body: Operations.EnrollDevice.Input.Body
+    ) async throws -> Operations.EnrollDevice.Output {
+        try await enrollDevice(Operations.EnrollDevice.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /v1/devices`.
+    /// - Remark: Generated from `#/paths//v1/devices/get(listDevices)`.
+    public func listDevices(headers: Operations.ListDevices.Input.Headers = .init()) async throws -> Operations.ListDevices.Output {
+        try await listDevices(Operations.ListDevices.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /v1/devices/close-legacy-enrollment`.
+    /// - Remark: Generated from `#/paths//v1/devices/close-legacy-enrollment/post(closeLegacyEnrollment)`.
+    public func closeLegacyEnrollment(headers: Operations.CloseLegacyEnrollment.Input.Headers = .init()) async throws -> Operations.CloseLegacyEnrollment.Output {
+        try await closeLegacyEnrollment(Operations.CloseLegacyEnrollment.Input(headers: headers))
+    }
+    /// - Remark: HTTP `DELETE /v1/devices/{id}`.
+    /// - Remark: Generated from `#/paths//v1/devices/{id}/delete(revokeDevice)`.
+    public func revokeDevice(
+        path: Operations.RevokeDevice.Input.Path,
+        headers: Operations.RevokeDevice.Input.Headers = .init()
+    ) async throws -> Operations.RevokeDevice.Output {
+        try await revokeDevice(Operations.RevokeDevice.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// - Remark: HTTP `GET /v1/generations`.

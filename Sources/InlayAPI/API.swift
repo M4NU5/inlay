@@ -2,7 +2,7 @@ import Foundation
 @_exported import InlayDomain
 
 public enum InlayAPI {
-    public static let version = 2
+    public static let version = 3
     public static let defaultPort = 8391
     public static let maximumRecordingSeconds = 180
     public static let maximumChunkBytes = 1_048_576
@@ -23,6 +23,37 @@ public struct DeviceIdentity: Codable, Equatable, Sendable {
     public var id: String
     public var name: String
     public init(id: String, name: String) { self.id = id; self.name = name }
+}
+
+public struct DeviceSummary: Codable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var createdAt: Date
+    public var lastSeenAt: Date?
+    public var revokedAt: Date?
+    public init(id: String, name: String, createdAt: Date, lastSeenAt: Date? = nil, revokedAt: Date? = nil) {
+        self.id = id; self.name = name; self.createdAt = createdAt
+        self.lastSeenAt = lastSeenAt; self.revokedAt = revokedAt
+    }
+}
+
+public struct DeviceList: Codable, Equatable, Sendable {
+    public var devices: [DeviceSummary]
+    public var legacyEnrollmentClosed: Bool
+    public init(devices: [DeviceSummary], legacyEnrollmentClosed: Bool) {
+        self.devices = devices; self.legacyEnrollmentClosed = legacyEnrollmentClosed
+    }
+}
+
+public struct EnrollDeviceRequest: Codable, Equatable, Sendable {
+    public var device: DeviceIdentity
+    public init(device: DeviceIdentity) { self.device = device }
+}
+
+public struct EnrollDeviceResponse: Codable, Equatable, Sendable {
+    public var device: DeviceSummary
+    public var token: String
+    public init(device: DeviceSummary, token: String) { self.device = device; self.token = token }
 }
 
 public struct ServerPreferences: Codable, Equatable, Sendable {

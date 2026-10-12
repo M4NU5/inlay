@@ -1,12 +1,12 @@
-import { timingSafeEqual } from "node:crypto";
 import { Readable } from "node:stream";
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import {
   MAXIMUM_ARTIFACT_BYTES,
   MAXIMUM_CHUNK_BYTES,
   MAXIMUM_DICTIONARY_BYTES,
   type WisprFlowArtifactName,
 } from "./api.ts";
+import type { RequestActor } from "./devices.ts";
 import { ServiceError } from "./errors.ts";
 import { logError } from "./log.ts";
 import type { GenerationService } from "./generation-service.ts";
@@ -22,18 +22,6 @@ const integer = (value: string | undefined) =>
   value !== undefined && /^-?\d+$/.test(value) && Number.isSafeInteger(Number(value))
     ? Number(value)
     : undefined;
-export function isLoopbackAuthority(value: string | undefined) {
-  if (!value) return false;
-  const match = /^(localhost|127\.0\.0\.1|\[::1\])(?::(\d+))?$/i.exec(value);
-  return (
-    !!match && (match[2] === undefined || (Number(match[2]) >= 1 && Number(match[2]) <= 65535))
-  );
-}
-const equal = (left: string, right: string) => {
-  const a = Buffer.from(left),
-    b = Buffer.from(right);
-  return a.length === b.length && timingSafeEqual(a, b);
-};
 const bytes = (value: unknown) => {
   if (!Buffer.isBuffer(value))
     throw new ServiceError(400, "invalid_chunk", "Supply a binary request body.");
@@ -57,7 +45,18 @@ const artifactName = (value: string) => {
 };
 
 type IDParams = { id: string };
-export function createHTTPServer(service: GenerationService, token?: string) {
+export function createHTTPServer(service: GenerationService) {
+  const actors = new WeakMap<FastifyRequest, RequestActor>();
+  const deviceIDOf = (request: FastifyRequest) => {
+    const actor = actors.get(request);
+    if (actor?.kind !== "device")
+      throw new ServiceError(
+        403,
+        "enrollment_required",
+        "This shared token now only enrolls devices. Reconnect from Inlay to give this Mac its own credential.",
+      );
+    return actor.id;
+  };
   const app = Fastify({ logger: false, bodyLimit: 262_144 });
   const parseJSON = app.getDefaultJsonParser("error", "error");
   app.removeContentTypeParser("application/json");
@@ -71,23 +70,25 @@ export function createHTTPServer(service: GenerationService, token?: string) {
     (_request, body, done) => done(null, body),
   );
   app.addHook("onRequest", async (request) => {
-    if (
-      token === undefined &&
-      (!isLoopbackAuthority(request.headers.host) ||
-        !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress ?? ""))
-    ) {
-      throw new ServiceError(
-        403,
-        "host_rejected",
-        "Tokenless connections must address localhost directly.",
+    const path = request.url.split("?")[0]!;
+    if (path !== "/v1/liveness") {
+      const header = request.headers.authorization ?? "";
+      const actor = service.authenticate(
+        header.startsWith("Bearer ") ? header.slice(7) : undefined,
       );
-    }
-    if (
-      request.url.split("?")[0] !== "/v1/liveness" &&
-      token !== undefined &&
-      !equal(request.headers.authorization ?? "", `Bearer ${token}`)
-    ) {
-      throw new ServiceError(401, "unauthorized", "Connect with the server's access token.");
+      if (actor.kind === "none")
+        throw new ServiceError(
+          401,
+          "unauthorized",
+          "Connect with this device's server credential.",
+        );
+      actors.set(request, actor);
+      if (actor.kind === "admin" && !path.startsWith("/v1/devices") && path !== "/v1/health")
+        throw new ServiceError(
+          403,
+          "enrollment_required",
+          "This shared token now only enrolls devices. Reconnect from Inlay to give this Mac its own credential.",
+        );
     }
     if (request.headers.origin !== undefined)
       throw new ServiceError(
@@ -135,12 +136,30 @@ export function createHTTPServer(service: GenerationService, token?: string) {
 
   app.get("/v1/liveness", () => ({ status: "ok" }));
   app.get("/v1/health", () => service.health());
+  app.post("/v1/devices/enroll", async (request, reply) => {
+    const result = await service.enrollDevice(
+      validateBody("EnrollDeviceRequest", request.body),
+      actors.get(request) ?? { kind: "none" },
+    );
+    return reply
+      .code(result.created ? 201 : 200)
+      .send({ device: result.device, token: result.token });
+  });
+  app.get("/v1/devices", () => service.listDevices());
+  app.post("/v1/devices/close-legacy-enrollment", () => service.closeLegacyEnrollment());
+  app.delete<{ Params: IDParams }>("/v1/devices/:id", async (request, reply) => {
+    await service.revokeDevice(request.params.id);
+    return reply.code(204).send();
+  });
   app.get("/v1/preferences", () => service.getPreferences());
   app.put("/v1/preferences", (request) =>
     service.updatePreferences(validateBody("PreferencesSnapshot", request.body)),
   );
   app.post("/v1/generations", async (request, reply) => {
-    const record = await service.create(validateBody("CreateGenerationRequest", request.body));
+    const record = await service.create(
+      validateBody("CreateGenerationRequest", request.body),
+      deviceIDOf(request),
+    );
     return reply.code(201).send(record);
   });
   app.get<{ Querystring: { limit?: string; before?: string; source?: string } }>(
@@ -181,6 +200,7 @@ export function createHTTPServer(service: GenerationService, token?: string) {
       sequence,
       { sampleRate, channels },
       bytes(request.body),
+      deviceIDOf(request),
     );
   });
   app.post<{ Params: IDParams }>("/v1/generations/:id/finish", async (request, reply) =>
@@ -190,11 +210,12 @@ export function createHTTPServer(service: GenerationService, token?: string) {
         await service.finish(
           identifier(request.params.id),
           validateBody("FinishGenerationRequest", request.body),
+          deviceIDOf(request),
         ),
       ),
   );
   app.post<{ Params: IDParams }>("/v1/generations/:id/cancel", (request) =>
-    service.cancel(identifier(request.params.id)),
+    service.cancel(identifier(request.params.id), deviceIDOf(request)),
   );
   app.post<{ Params: IDParams }>("/v1/generations/:id/reprocess", async (request, reply) =>
     reply.code(202).send(await service.reprocess(identifier(request.params.id))),
@@ -203,6 +224,7 @@ export function createHTTPServer(service: GenerationService, token?: string) {
     service.recordDelivery(
       identifier(request.params.id),
       validateBody("DeliveryReceipt", request.body),
+      deviceIDOf(request),
     ),
   );
   app.delete<{ Params: IDParams }>("/v1/generations/:id", async (request, reply) => {

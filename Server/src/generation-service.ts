@@ -9,6 +9,7 @@ import type {
   AudioStreamFormat,
   CreateGenerationRequest,
   DeliveryReceipt,
+  EnrollDeviceRequest,
   DictationContinuation,
   FinishGenerationRequest,
   GenerationPage,
@@ -27,6 +28,7 @@ import { decodePersonalDictionary } from "./domain/dictionary.ts";
 import { validateBody } from "./validation.ts";
 import type { InferenceBackend } from "./inference/native-inference.ts";
 import { InferenceError } from "./inference/inference-error.ts";
+import { DeviceStore, timingSafeStringEqual, type RequestActor } from "./devices.ts";
 import { ServiceError } from "./errors.ts";
 import { logError, logInfo, logWarn } from "./log.ts";
 import {
@@ -153,7 +155,14 @@ function normalizePreferences(
 interface ServiceConfiguration {
   dataDirectory: string;
   development: boolean;
+  adminToken: string;
 }
+
+const validDeviceLabel = (text: string) =>
+  text.length > 0 &&
+  graphemes(text) <= 128 &&
+  text === text.trim() &&
+  !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(text);
 interface Upload {
   format: AudioStreamFormat;
   chunks: { offset: number; count: number }[];
@@ -195,6 +204,7 @@ export class GenerationService {
   private importQueue: Promise<unknown> = Promise.resolve();
   private subscribers = new Map<string, Set<Watcher>>();
   private readonly imports: WisprFlowImports;
+  private devices!: DeviceStore;
   private constructor(
     private readonly configuration: ServiceConfiguration,
     private readonly inference: InferenceBackend,
@@ -247,6 +257,14 @@ export class GenerationService {
   private directory(id: string) {
     return join(this.configuration.dataDirectory, "generations", id);
   }
+  private requireOwner(record: GenerationRecord, actorDeviceID: string) {
+    if (record.device.id !== actorDeviceID)
+      throw new ServiceError(
+        403,
+        "device_mismatch",
+        "This credential belongs to a different device.",
+      );
+  }
   private getInternal(id: string) {
     const record = this.records.get(id.toUpperCase());
     if (!record) throw new ServiceError(404, "not_found", "Recording not found.");
@@ -274,6 +292,7 @@ export class GenerationService {
     await ensureDirectory(data);
     await ensureDirectory(join(data, "generations"));
     await this.imports.initialize();
+    this.devices = await DeviceStore.open(data);
     const path = join(data, "preferences.json");
     try {
       const raw: unknown = JSON.parse(
@@ -543,6 +562,50 @@ export class GenerationService {
     // Synchronous read-copy: do not add an await without re-queueing.
     return copy(this.preferences);
   }
+  authenticate(token: string | undefined): RequestActor {
+    if (!token) return { kind: "none" };
+    if (timingSafeStringEqual(this.configuration.adminToken, token)) return { kind: "admin" };
+    const device = this.devices?.authenticateDevice(token);
+    if (!device) return { kind: "none" };
+    void this.devices.touch(device.id).catch(() => {});
+    return { kind: "device", id: device.id, name: device.name };
+  }
+  enrollDevice(request: EnrollDeviceRequest, actor: RequestActor) {
+    return this.mutate(async () => {
+      if (!validDeviceLabel(request.device.id) || !validDeviceLabel(request.device.name))
+        throw new ServiceError(
+          400,
+          "invalid_device",
+          "Device ID and name must be nonempty single-line text of at most 128 characters.",
+        );
+      if (actor.kind === "device" && actor.id !== request.device.id)
+        throw new ServiceError(
+          403,
+          "device_mismatch",
+          "A device may only renew its own credential.",
+        );
+      if (
+        actor.kind === "admin" &&
+        this.devices.legacyEnrollmentClosed &&
+        !this.devices.find(request.device.id)
+      )
+        throw new ServiceError(
+          403,
+          "enrollment_closed",
+          "The admin token no longer enrolls new devices on this server.",
+        );
+      return this.devices.enroll(request.device);
+    });
+  }
+  listDevices() {
+    return this.devices.list();
+  }
+  revokeDevice(id: string) {
+    return this.mutate(() => this.devices.revoke(id));
+  }
+  closeLegacyEnrollment() {
+    return this.mutate(() => this.devices.closeLegacyEnrollment());
+  }
   updatePreferences(update: components["schemas"]["PreferencesSnapshot"]) {
     return this.mutate(async () => {
       if (update.revision !== this.preferences.revision)
@@ -568,22 +631,24 @@ export class GenerationService {
       return copy(next);
     });
   }
-  async create(request: CreateGenerationRequest) {
+  async create(request: CreateGenerationRequest, actorDeviceID: string) {
     const state = await this.inference.readiness(false);
     return this.mutate(async () => {
       if (this.stopping)
         throw new ServiceError(503, "server_stopping", "The server is shutting down.");
-      const validLabel = (text: string) =>
-        text.length > 0 &&
-        graphemes(text) <= 128 &&
-        text === text.trim() &&
-        !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(text);
-      if (!validLabel(request.device.id) || !validLabel(request.device.name))
+      if (!validDeviceLabel(request.device.id) || !validDeviceLabel(request.device.name))
         throw new ServiceError(
           400,
           "invalid_device",
           "Device ID and name must be nonempty single-line text of at most 128 characters.",
         );
+      if (request.device.id !== actorDeviceID)
+        throw new ServiceError(
+          403,
+          "device_mismatch",
+          "This credential belongs to a different device.",
+        );
+      await this.devices.rename(request.device.id, request.device.name);
       const existing = [...this.records.values()].find(
         (record) =>
           record.requestID.toUpperCase() === request.requestID.toUpperCase() &&
@@ -651,11 +716,13 @@ export class GenerationService {
     sequence: number,
     format: AudioStreamFormat,
     data: Uint8Array,
+    actorDeviceID: string,
   ): Promise<AudioChunkReceipt> {
     const bytes = Buffer.from(data);
     return this.withGenerationLock(id, async () => {
       const record = this.getInternal(id);
       id = record.id;
+      this.requireOwner(record, actorDeviceID);
       if (record.status !== "receiving")
         throw new ServiceError(
           409,
@@ -794,10 +861,11 @@ export class GenerationService {
       };
     });
   }
-  finish(id: string, request: FinishGenerationRequest) {
+  finish(id: string, request: FinishGenerationRequest, actorDeviceID: string) {
     return this.withGenerationLock(id, async () => {
       const record = this.getInternal(id);
       id = record.id;
+      this.requireOwner(record, actorDeviceID);
       if (record.status !== "receiving") {
         if (
           record.inferenceAudio?.frameCount !== request.inferenceFrames ||
@@ -994,8 +1062,11 @@ export class GenerationService {
     return iterator;
   }
 
-  cancel(id: string) {
-    return this.withGenerationLock(id, () => this.cancelRecord(id));
+  cancel(id: string, actorDeviceID: string) {
+    return this.withGenerationLock(id, async () => {
+      this.requireOwner(this.getInternal(id), actorDeviceID);
+      return this.cancelRecord(id);
+    });
   }
   reprocess(id: string) {
     return this.withGenerationLock(id, async () => {
@@ -1070,9 +1141,10 @@ export class GenerationService {
     await this.cleanPartial(record.id);
     return copy(record);
   }
-  recordDelivery(id: string, receipt: DeliveryReceipt) {
+  recordDelivery(id: string, receipt: DeliveryReceipt, actorDeviceID: string) {
     return this.withGenerationLock(id, async () => {
       const record = this.getInternal(id);
+      this.requireOwner(record, actorDeviceID);
       if (record.importedSource)
         throw new ServiceError(
           400,

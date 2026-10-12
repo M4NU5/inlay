@@ -33,6 +33,10 @@ export type PreferencesSnapshot = Omit<Schemas["PreferencesSnapshot"], "preferen
 };
 
 export type DeviceIdentity = Schemas["DeviceIdentity"];
+export type DeviceSummary = Schemas["DeviceSummary"];
+export type DeviceList = Schemas["DeviceList"];
+export type EnrollDeviceRequest = Schemas["EnrollDeviceRequest"];
+export type EnrollDeviceResponse = Schemas["EnrollDeviceResponse"];
 export type ModelRuntimeInfo = Schemas["ModelRuntimeInfo"];
 export type ServerHealth = Schemas["ServerHealth"];
 export type CreateGenerationRequest = Schemas["CreateGenerationRequest"];
@@ -68,7 +72,7 @@ export type WisprFlowImportResult = Omit<Schemas["WisprFlowImportResult"], "reco
 };
 export type APIErrorResponse = Schemas["APIErrorResponse"];
 
-export const API_VERSION = 2;
+export const API_VERSION = 3;
 export const DEFAULT_PORT = 8391;
 export const MAXIMUM_RECORDING_SECONDS = 180;
 export const MAXIMUM_CHUNK_BYTES = 1_048_576;

@@ -2,13 +2,13 @@
 openapi: "3.1.0"
 info:
   title: "Inlay API"
-  version: "2.0.0"
+  version: "3.0.0"
   description: "Shared transport contract for the Swift client and TypeScript server. Optional properties are omitted rather than encoded as null. Dates use whole-second ISO8601 UTC timestamps."
 servers:
   - url: "http://localhost:8391"
 security:
   - bearerAuth: []
-x-inlay-apiVersion: 2
+x-inlay-apiVersion: 3
 x-inlay-defaultPort: 8391
 x-inlay-maximumRecordingSeconds: 180
 x-inlay-maximumChunkBytes: 1048576
@@ -70,6 +70,68 @@ paths:
             schema:
               "$ref": "#/components/schemas/PreferencesSnapshot"
         x-maximumBytes: 262144
+  "/v1/devices/enroll":
+    post:
+      operationId: "enrollDevice"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/EnrollDeviceRequest"
+      responses:
+        "201":
+          description: "Device enrolled"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/EnrollDeviceResponse"
+        "200":
+          description: "Device credential rotated"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/EnrollDeviceResponse"
+        default:
+          "$ref": "#/components/responses/APIError"
+  "/v1/devices":
+    get:
+      operationId: "listDevices"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/DeviceList"
+        default:
+          "$ref": "#/components/responses/APIError"
+  "/v1/devices/close-legacy-enrollment":
+    post:
+      operationId: "closeLegacyEnrollment"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/DeviceList"
+        default:
+          "$ref": "#/components/responses/APIError"
+  "/v1/devices/{id}":
+    delete:
+      operationId: "revokeDevice"
+      responses:
+        "204":
+          description: "Device revoked"
+        default:
+          "$ref": "#/components/responses/APIError"
+      parameters:
+        - name: "id"
+          in: "path"
+          required: true
+          schema:
+            "$ref": "#/components/schemas/UUID"
   "/v1/generations":
     get:
       operationId: "listGenerations"
@@ -614,6 +676,59 @@ components:
           maxItems: 32
       required:
         - "lists"
+    DeviceSummary:
+      type: "object"
+      additionalProperties: false
+      properties:
+        id:
+          type: "string"
+        name:
+          type: "string"
+        createdAt:
+          type: "string"
+          format: "date-time"
+        lastSeenAt:
+          type: "string"
+          format: "date-time"
+        revokedAt:
+          type: "string"
+          format: "date-time"
+      required:
+        - "id"
+        - "name"
+        - "createdAt"
+    DeviceList:
+      type: "object"
+      additionalProperties: false
+      properties:
+        devices:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/DeviceSummary"
+        legacyEnrollmentClosed:
+          type: "boolean"
+      required:
+        - "devices"
+        - "legacyEnrollmentClosed"
+    EnrollDeviceRequest:
+      type: "object"
+      additionalProperties: false
+      properties:
+        device:
+          "$ref": "#/components/schemas/DeviceIdentity"
+      required:
+        - "device"
+    EnrollDeviceResponse:
+      type: "object"
+      additionalProperties: false
+      properties:
+        device:
+          "$ref": "#/components/schemas/DeviceSummary"
+        token:
+          type: "string"
+      required:
+        - "device"
+        - "token"
     DeviceIdentity:
       type: "object"
       additionalProperties: false
@@ -1288,7 +1403,7 @@ components:
     bearerAuth:
       type: "http"
       scheme: "bearer"
-      description: "Optional on loopback. Required for remote binding. Native clients send no Origin header."
+      description: "Required on every route except liveness: a per-device token, or the admin token on device routes. Native clients send no Origin header."
   responses:
     APIError:
       description: "A request, admission, or server error."

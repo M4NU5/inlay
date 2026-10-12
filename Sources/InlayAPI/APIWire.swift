@@ -25,6 +25,10 @@ extension InlayAPI {
 }
 
 extension DeviceIdentity: APIWireModel { public typealias Wire = Components.Schemas.DeviceIdentity }
+extension DeviceSummary: APIWireModel { public typealias Wire = Components.Schemas.DeviceSummary }
+extension DeviceList: APIWireModel { public typealias Wire = Components.Schemas.DeviceList }
+extension EnrollDeviceRequest: APIWireModel { public typealias Wire = Components.Schemas.EnrollDeviceRequest }
+extension EnrollDeviceResponse: APIWireModel { public typealias Wire = Components.Schemas.EnrollDeviceResponse }
 extension ServerPreferences: APIWireModel { public typealias Wire = Components.Schemas.ServerPreferences }
 extension PreferencesSnapshot: APIWireModel { public typealias Wire = Components.Schemas.PreferencesSnapshot }
 extension ModelRuntimeInfo: APIWireModel { public typealias Wire = Components.Schemas.ModelRuntimeInfo }

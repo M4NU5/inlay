@@ -206,6 +206,178 @@ extension Components {
                 ])
             }
         }
+        /// - Remark: Generated from `#/components/schemas/DeviceSummary`.
+        public struct DeviceSummary: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DeviceSummary/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DeviceSummary/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DeviceSummary/createdAt`.
+            public var createdAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/DeviceSummary/lastSeenAt`.
+            public var lastSeenAt: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/DeviceSummary/revokedAt`.
+            public var revokedAt: Foundation.Date?
+            /// Creates a new `DeviceSummary`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - name:
+            ///   - createdAt:
+            ///   - lastSeenAt:
+            ///   - revokedAt:
+            public init(
+                id: Swift.String,
+                name: Swift.String,
+                createdAt: Foundation.Date,
+                lastSeenAt: Foundation.Date? = nil,
+                revokedAt: Foundation.Date? = nil
+            ) {
+                self.id = id
+                self.name = name
+                self.createdAt = createdAt
+                self.lastSeenAt = lastSeenAt
+                self.revokedAt = revokedAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case name
+                case createdAt
+                case lastSeenAt
+                case revokedAt
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.id = try container.decode(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.createdAt = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .createdAt
+                )
+                self.lastSeenAt = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .lastSeenAt
+                )
+                self.revokedAt = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .revokedAt
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "id",
+                    "name",
+                    "createdAt",
+                    "lastSeenAt",
+                    "revokedAt"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/DeviceList`.
+        public struct DeviceList: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DeviceList/devices`.
+            public var devices: [Components.Schemas.DeviceSummary]
+            /// - Remark: Generated from `#/components/schemas/DeviceList/legacyEnrollmentClosed`.
+            public var legacyEnrollmentClosed: Swift.Bool
+            /// Creates a new `DeviceList`.
+            ///
+            /// - Parameters:
+            ///   - devices:
+            ///   - legacyEnrollmentClosed:
+            public init(
+                devices: [Components.Schemas.DeviceSummary],
+                legacyEnrollmentClosed: Swift.Bool
+            ) {
+                self.devices = devices
+                self.legacyEnrollmentClosed = legacyEnrollmentClosed
+            }
+            public enum CodingKeys: String, CodingKey {
+                case devices
+                case legacyEnrollmentClosed
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.devices = try container.decode(
+                    [Components.Schemas.DeviceSummary].self,
+                    forKey: .devices
+                )
+                self.legacyEnrollmentClosed = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .legacyEnrollmentClosed
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "devices",
+                    "legacyEnrollmentClosed"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/EnrollDeviceRequest`.
+        public struct EnrollDeviceRequest: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EnrollDeviceRequest/device`.
+            public var device: Components.Schemas.DeviceIdentity
+            /// Creates a new `EnrollDeviceRequest`.
+            ///
+            /// - Parameters:
+            ///   - device:
+            public init(device: Components.Schemas.DeviceIdentity) {
+                self.device = device
+            }
+            public enum CodingKeys: String, CodingKey {
+                case device
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.device = try container.decode(
+                    Components.Schemas.DeviceIdentity.self,
+                    forKey: .device
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "device"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/EnrollDeviceResponse`.
+        public struct EnrollDeviceResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EnrollDeviceResponse/device`.
+            public var device: Components.Schemas.DeviceSummary
+            /// - Remark: Generated from `#/components/schemas/EnrollDeviceResponse/token`.
+            public var token: Swift.String
+            /// Creates a new `EnrollDeviceResponse`.
+            ///
+            /// - Parameters:
+            ///   - device:
+            ///   - token:
+            public init(
+                device: Components.Schemas.DeviceSummary,
+                token: Swift.String
+            ) {
+                self.device = device
+                self.token = token
+            }
+            public enum CodingKeys: String, CodingKey {
+                case device
+                case token
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.device = try container.decode(
+                    Components.Schemas.DeviceSummary.self,
+                    forKey: .device
+                )
+                self.token = try container.decode(
+                    Swift.String.self,
+                    forKey: .token
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "device",
+                    "token"
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/DeviceIdentity`.
         public struct DeviceIdentity: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/DeviceIdentity/id`.

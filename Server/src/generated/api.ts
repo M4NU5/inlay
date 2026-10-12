@@ -47,6 +47,70 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/devices/enroll": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["enrollDevice"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/devices": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["listDevices"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/devices/close-legacy-enrollment": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["closeLegacyEnrollment"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/devices/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations["revokeDevice"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/generations": {
     parameters: {
       query?: never;
@@ -335,6 +399,27 @@ export interface components {
     };
     PersonalDictionary: {
       lists: components["schemas"]["DictionaryList"][];
+    };
+    DeviceSummary: {
+      id: string;
+      name: string;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      lastSeenAt?: string;
+      /** Format: date-time */
+      revokedAt?: string;
+    };
+    DeviceList: {
+      devices: components["schemas"]["DeviceSummary"][];
+      legacyEnrollmentClosed: boolean;
+    };
+    EnrollDeviceRequest: {
+      device: components["schemas"]["DeviceIdentity"];
+    };
+    EnrollDeviceResponse: {
+      device: components["schemas"]["DeviceSummary"];
+      token: string;
     };
     DeviceIdentity: {
       id: string;
@@ -683,6 +768,103 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["PreferencesSnapshot"];
         };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
+  enrollDevice: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["EnrollDeviceRequest"];
+      };
+    };
+    responses: {
+      /** @description Device credential rotated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EnrollDeviceResponse"];
+        };
+      };
+      /** @description Device enrolled */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EnrollDeviceResponse"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
+  listDevices: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Success */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DeviceList"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
+  closeLegacyEnrollment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Success */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DeviceList"];
+        };
+      };
+      default: components["responses"]["APIError"];
+    };
+  };
+  revokeDevice: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components["schemas"]["UUID"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Device revoked */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       default: components["responses"]["APIError"];
     };
