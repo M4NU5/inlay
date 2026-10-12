@@ -72,10 +72,6 @@ private struct DevicePreferencesForm: View {
                     .accessibilityIdentifier("preferences.mute-output")
                 Toggle("Never leave transcripts on the clipboard", isOn: $controller.preserveClipboard)
                     .accessibilityIdentifier("preferences.preserve-clipboard")
-                if controller.preserveClipboard {
-                    Text("Your clipboard is restored after pasting. Unconfirmed words stay here to copy.")
-                        .font(.caption).foregroundStyle(InlayPalette.muted)
-                }
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
                     Text(error).font(.caption).foregroundStyle(InlayPalette.warning)

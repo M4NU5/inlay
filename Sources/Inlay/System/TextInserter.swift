@@ -227,7 +227,7 @@ final class TextInserter {
         case .blocked(let reason): return .failed(reason: reason)
         case .clipboard:
             guard !preservingClipboard else {
-                return .failed(reason: "No editable field was confirmed. Your clipboard was left unchanged. Your words are ready to copy.")
+                return .failed(reason: "No editable field was confirmed. Your words are ready to copy.")
             }
             switch DictationClipboard.copy(clipboardText, to: pasteboard, onlyIfUnchangedSince: changeCount) {
             case .success: return .copied(reason: "Copied to clipboard")
