@@ -317,14 +317,18 @@ export class NativeInference implements InferenceBackend {
       !response.language.length ||
       bytes(response.language) > 32
     ) {
-      await this.speech.shutdown();
+      this.speech.discard(
+        new InferenceError("invalidResponse", "Parakeet returned an invalid transcript."),
+      );
       throw new InferenceError("invalidResponse", "Parakeet returned an invalid transcript.");
     }
     let hints: ModelHintUsage | undefined;
     try {
       hints = vocabularyDiagnostics(response, vocabularyTerms);
     } catch (error) {
-      await this.speech.shutdown();
+      this.speech.discard(
+        new InferenceError("invalidResponse", "Parakeet returned invalid vocabulary diagnostics."),
+      );
       throw error;
     }
     const state = this.speech.snapshot();
@@ -384,7 +388,9 @@ export class NativeInference implements InferenceBackend {
       !Number.isFinite(response.elapsed) ||
       response.elapsed < 0
     ) {
-      await this.proof.shutdown();
+      this.proof.discard(
+        new InferenceError("invalidResponse", "Qwen returned an invalid correction."),
+      );
       throw new InferenceError("invalidResponse", "Qwen returned an invalid correction.");
     }
     const state = this.proof.snapshot();
