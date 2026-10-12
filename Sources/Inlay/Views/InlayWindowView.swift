@@ -187,7 +187,7 @@ struct DictationPage: View {
                     .frame(height: 28)
                     Divider()
                     transcript
-                        .frame(height: 205)
+                        .frame(minHeight: 120, maxHeight: .infinity)
                         .accessibilityIdentifier("dictation.transcript")
                     Divider()
                     HStack {
@@ -212,7 +212,7 @@ struct DictationPage: View {
                 }
             }
             .padding(30)
-            .frame(maxWidth: 780)
+            .frame(maxWidth: InlayPageMetrics.contentWidth)
             .frame(maxWidth: .infinity, alignment: .top)
         }
     }
@@ -266,6 +266,36 @@ struct DictationPage: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 10)
+            }
+        }
+    }
+}
+
+enum InlayPageMetrics {
+    static let contentWidth: CGFloat = 760
+    static let horizontalPadding: CGFloat = 28
+}
+
+/// The one page scaffold: flat canvas, a heading, then content capped at
+/// 760 pt and centered. Form pages pass their grouped Form as content;
+/// History (split list/detail) is the documented full-bleed exception.
+struct InlayPageScaffold<Content: View>: View {
+    var title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ZStack {
+            InlayPalette.canvas.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 0) {
+                InlayPageHeading(title: title)
+                    .frame(maxWidth: InlayPageMetrics.contentWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, InlayPageMetrics.horizontalPadding)
+                    .padding(.top, 28)
+                    .padding(.bottom, 8)
+                content
+                    .frame(maxWidth: InlayPageMetrics.contentWidth)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
     }

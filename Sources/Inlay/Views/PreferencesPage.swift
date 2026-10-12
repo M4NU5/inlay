@@ -6,8 +6,10 @@ struct DevicePreferencesPage: View {
     @ObservedObject var controller: InlayController
 
     var body: some View {
-        DevicePreferencesForm(controller: controller, preferences: controller.preferences,
-                              configuration: controller.configuration)
+        InlayPageScaffold(title: "This Mac") {
+            DevicePreferencesForm(controller: controller, preferences: controller.preferences,
+                                  configuration: controller.configuration)
+        }
     }
 }
 
@@ -212,7 +214,6 @@ private struct DevicePreferencesForm: View {
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .toggleStyle(.switch)
-        .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
         .onAppear {
             endpoint = preferences.endpoint
@@ -377,7 +378,7 @@ struct ServerPreferencesPage: View {
             .scrollContentBackground(.hidden)
             .toggleStyle(.switch)
         }
-        .frame(maxWidth: 800)
+        .frame(maxWidth: InlayPageMetrics.contentWidth)
         .frame(maxWidth: .infinity)
         .onAppear {
             loadLatest()

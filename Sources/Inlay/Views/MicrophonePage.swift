@@ -58,7 +58,7 @@ private struct MicrophoneSettingsView: View {
             .padding(.horizontal, 28)
             .padding(.top, 30)
             .padding(.bottom, 24)
-            .frame(maxWidth: 700)
+            .frame(maxWidth: InlayPageMetrics.contentWidth)
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
