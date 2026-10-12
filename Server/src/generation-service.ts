@@ -359,7 +359,7 @@ export class GenerationService {
     // sessions are cancelled. This runs after the queue drains so the
     // queued state is the final write.
     await this.mutate(async () => {
-      for (const record of [...this.records.values()]) {
+      for (const record of this.records.values()) {
         if (record.status === "receiving") await this.cancelRecord(record.id);
         else if (!terminal(record) && record.inferenceAudio) {
           const queued = copy(record);
