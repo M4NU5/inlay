@@ -6,6 +6,7 @@ struct HistoryPage: View {
     @ObservedObject var controller: InlayController
     @State private var selectedID: UUID?
     @State private var deviceID = "all"
+    @State private var confirmingDeleteAudio = false
     @State private var confirmingDelete = false
     @State private var copiedID: UUID?
     @State private var showingWisprFlowImport = false
@@ -99,7 +100,18 @@ struct HistoryPage: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Its archived text and files will be removed from every device’s history.")
+            Text("Its archived text and files will be removed from every device’s history. Copies in your own backups are not removed.")
+        }
+        .confirmationDialog("Delete this recording's audio from the server?", isPresented: $confirmingDeleteAudio) {
+            if let selected {
+                Button("Delete audio", role: .destructive) {
+                    controller.errorMessage = nil
+                    controller.deleteGenerationAudio(selected.id)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The transcript stays in history. This cannot be undone.")
         }
     }
 
@@ -111,8 +123,12 @@ struct HistoryPage: View {
                         Text(generation.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
                             .font(.caption)
                         Spacer(minLength: 4)
-                        if generation.status != .completed {
-                            Image(systemName: generation.status == .failed ? "exclamationmark.circle" : "clock")
+                        if generation.status == .failed || generation.status == .cancelled {
+                            Text(statusLabel(generation.status))
+                                .font(.caption)
+                                .foregroundStyle(InlayPalette.warning)
+                        } else if generation.status != .completed {
+                            Image(systemName: "clock")
                                 .foregroundStyle(InlayPalette.warning)
                         }
                     }
@@ -128,7 +144,7 @@ struct HistoryPage: View {
                 }
                 .padding(.vertical, 8)
                 .tag(generation.id)
-                .accessibilityLabel("\(sourceLabel(generation)), \(summary(generation))")
+                .accessibilityLabel(accessibilityText(generation))
             }
         }
         .listStyle(.inset)
@@ -176,6 +192,17 @@ struct HistoryPage: View {
                     VStack(alignment: .leading, spacing: 18) {
                         if let error = selected.error {
                             Text(error).foregroundStyle(InlayPalette.warning)
+                        }
+                        if selected.status == .cancelled || selected.status == .failed {
+                            if selected.inferenceAudio != nil || selected.originalAudio != nil {
+                                Text("This recording was \(selected.status == .cancelled ? "cancelled" : "failed"). Its audio is kept in shared history until the audio retention period ends or you delete it.")
+                                    .font(.caption)
+                                    .foregroundStyle(InlayPalette.muted)
+                            } else {
+                                Text("Audio was removed by the retention setting.")
+                                    .font(.caption)
+                                    .foregroundStyle(InlayPalette.muted)
+                            }
                         }
                         Text(selected.finalText.isEmpty ? "No transcript available." : selected.finalText)
                             .font(.body)
@@ -245,6 +272,9 @@ struct HistoryPage: View {
                     if selected.originalAudio == nil, let reason = selected.originalAudioOmittedReason {
                         Text(reason).font(.caption).foregroundStyle(InlayPalette.muted).lineLimit(1)
                     }
+                    if selected.inferenceAudio != nil || selected.originalAudio != nil {
+                        Button("Delete audio") { confirmingDeleteAudio = true }
+                    }
                     if let source = selected.importedSource {
                         if source.artifactNames.contains(.sourceWAV) {
                             Button("Open Wispr Flow audio") {
@@ -279,6 +309,12 @@ struct HistoryPage: View {
             ContentUnavailableView("Select a dictation", systemImage: "text.alignleft")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func accessibilityText(_ generation: GenerationRecord) -> String {
+        let base = "\(sourceLabel(generation)), \(summary(generation))"
+        return generation.status == .failed || generation.status == .cancelled
+            ? "\(statusLabel(generation.status)), \(base)" : base
     }
 
     private func statusLabel(_ status: GenerationStatus) -> String {

@@ -195,6 +195,8 @@ struct ServerPreferencesPage: View {
     @State private var draft = ServerPreferences()
     @State private var base: PreferencesSnapshot?
     @State private var expandedLists = Set<String>()
+    @State private var confirmingPurgeOriginal = false
+    @State private var confirmingPurgeAll = false
 
     private var dirty: Bool { base.map { draft != $0.preferences } ?? false }
     private var changedRemotely: Bool {
@@ -285,11 +287,41 @@ struct ServerPreferencesPage: View {
                 Section {
                     Toggle("Keep original microphone audio", isOn: $draft.keepOriginalAudio)
                         .accessibilityIdentifier("preferences.keep-original")
-                    Text("Transcription audio is always kept. This also saves the original microphone audio for future dictations.")
+                    Picker("Keep audio", selection: $draft.audioRetentionDays) {
+                        Text("7 days").tag(7)
+                        Text("30 days").tag(30)
+                        Text("90 days").tag(90)
+                        Text("1 year").tag(365)
+                        Text("Forever").tag(0)
+                    }
+                    .accessibilityIdentifier("preferences.audio-retention")
+                    Text("Transcription and original audio are removed after this period; text is always kept. Keeping originals also saves the original microphone audio for future dictations.")
                         .font(.caption)
                         .foregroundStyle(InlayPalette.muted)
+                    if let usage = controller.storageUsage {
+                        LabeledContent("Recording audio", value: ByteCountFormatter.string(fromByteCount: usage.audioByteCount, countStyle: .file))
+                        LabeledContent("Transcription audio", value: ByteCountFormatter.string(fromByteCount: usage.inferenceByteCount, countStyle: .file))
+                        LabeledContent("Original audio", value: ByteCountFormatter.string(fromByteCount: usage.originalByteCount, countStyle: .file))
+                        LabeledContent("Recordings", value: "\(usage.generationCount)")
+                        if let oldest = usage.oldestAudioAt {
+                            LabeledContent("Oldest audio", value: oldest.formatted(date: .abbreviated, time: .omitted))
+                        }
+                        LabeledContent("Free on server", value: ByteCountFormatter.string(fromByteCount: usage.freeByteCount, countStyle: .file))
+                        HStack {
+                            Button("Delete original audio") { confirmingPurgeOriginal = true }
+                            Button("Delete all audio") { confirmingPurgeAll = true }
+                        }
+                    }
                 } header: { Text("Shared history").textCase(nil) }
                 .disabled(!available)
+                .confirmationDialog("Delete all original audio?", isPresented: $confirmingPurgeOriginal) {
+                    Button("Delete original audio", role: .destructive) { controller.purgeAudio(kind: .original) }
+                    Button("Cancel", role: .cancel) {}
+                } message: { Text("Transcripts and transcription audio stay. This cannot be undone.") }
+                .confirmationDialog("Delete all recording audio?", isPresented: $confirmingPurgeAll) {
+                    Button("Delete all audio", role: .destructive) { controller.purgeAudio(kind: nil) }
+                    Button("Cancel", role: .cancel) {}
+                } message: { Text("Transcripts stay in history. This cannot be undone.") }
 
                 Section {
                     dictionaryEditor
@@ -305,6 +337,7 @@ struct ServerPreferencesPage: View {
         .onAppear {
             loadLatest()
             controller.refreshServer()
+            Task { await controller.refreshStorageUsage() }
         }
         .onChange(of: controller.sharedPreferences) { old, latest in
             if base == nil || !dirty || latest?.preferences == draft {

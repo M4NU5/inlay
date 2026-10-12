@@ -160,6 +160,10 @@ extension ServerClient {
         try await json(path: "v1/devices/close-legacy-enrollment", method: "POST")
     }
     func preferences() async throws -> PreferencesSnapshot { try await json(path: "v1/preferences") }
+    func storageUsage() async throws -> StorageUsage { try await json(path: "v1/storage") }
+    func purgeAudio(_ request: PurgeAudioRequest) async throws -> PurgeAudioResult {
+        try await json(path: "v1/storage/purge-audio", method: "POST", body: Self.encode(request))
+    }
     func updatePreferences(_ value: PreferencesSnapshot) async throws -> PreferencesSnapshot {
         try await json(path: "v1/preferences", method: "PUT", body: Self.encode(value))
     }
@@ -268,6 +272,9 @@ extension ServerClient {
     }
     func delete(_ id: UUID) async throws {
         try await send(path: "v1/generations/\(id)", method: "DELETE")
+    }
+    func deleteAudio(_ id: UUID) async throws {
+        try await send(path: "v1/generations/\(id)/audio", method: "DELETE")
     }
     func delivery(_ id: UUID, receipt: DeliveryReceipt) async throws {
         try await send(path: "v1/generations/\(id)/delivery", method: "POST", body: Self.encode(receipt))

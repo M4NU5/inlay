@@ -131,6 +131,7 @@ final class InlayController: ObservableObject {
     @Published private(set) var isCheckingServer = false
     @Published private(set) var isSavingPreferences = false
     @Published private(set) var sharedPreferences: PreferencesSnapshot?
+    @Published private(set) var storageUsage: StorageUsage?
     @Published private(set) var generations: [GenerationRecord] = []
     @Published private(set) var undeliveredResults: [GenerationRecord] = []
     @Published private(set) var devices: [DeviceSummary] = []
@@ -734,6 +735,36 @@ final class InlayController: ObservableObject {
             do {
                 _ = try await client().reprocess(id)
                 refreshServer()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func refreshStorageUsage() async {
+        guard let connection = try? client(), let usage = try? await connection.storageUsage() else { return }
+        storageUsage = usage
+    }
+
+    func purgeAudio(kind: AudioKind?) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await client().purgeAudio(PurgeAudioRequest(kind: kind))
+                await refreshStorageUsage()
+                refreshHistory()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func deleteGenerationAudio(_ id: UUID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await client().deleteAudio(id)
+                if let index = generations.firstIndex(where: { $0.id == id }) {
+                    generations[index].inferenceAudio = nil
+                    generations[index].originalAudio = nil
+                } else { refreshHistory() }
+                await refreshStorageUsage()
             } catch { errorMessage = error.localizedDescription }
         }
     }
