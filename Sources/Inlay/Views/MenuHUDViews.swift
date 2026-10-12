@@ -121,7 +121,7 @@ struct DictationHUD: View {
         }
         .task(id: presentation.id) { await enter() }
         .onChange(of: controller.activity) { _, activity in
-            guard presentation.id != nil, !activity.isCapturing else { return }
+            guard presentation.id != nil, !activity.isBusy else { return }
             withAnimation(morphAnimation) { expanded = false }
         }
     }
@@ -140,7 +140,7 @@ struct DictationHUD: View {
         guard presentation.id != nil else { return }
         if reduceMotion {
             entered = true
-            expanded = controller.activity.isCapturing
+            expanded = controller.activity.isBusy
             return
         }
         await Task.yield()
@@ -149,7 +149,7 @@ struct DictationHUD: View {
         // This only stages the visual; microphone startup never waits for it.
         do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
         guard !Task.isCancelled, presentation.id != nil else { return }
-        withAnimation(morphAnimation) { expanded = controller.activity.isCapturing }
+        withAnimation(morphAnimation) { expanded = controller.activity.isBusy }
     }
 
     private var capsule: some View {
@@ -168,8 +168,8 @@ struct DictationHUD: View {
             .opacity(expanded ? 0 : 1)
             .allowsHitTesting(!expanded)
             .accessibilityHidden(expanded)
-            .accessibilityLabel(controller.isBusy ? "Cancel dictation" : hudLabel)
-            .accessibilityHint(controller.isBusy ? "Cancel this dictation" : result.needsAttention ? "Open Inlay for details" : "Dismiss status")
+            .accessibilityLabel(controller.isBusy ? stageText : hudLabel)
+            .accessibilityHint(controller.isBusy ? "" : result.needsAttention ? "Open Inlay for details" : "Dismiss status")
             .accessibilityIdentifier("hud.circle")
         }
         .frame(width: expanded ? Self.width : Self.height, height: Self.height)
@@ -200,9 +200,12 @@ struct DictationHUD: View {
                 if controller.isRecording {
                     RecordingWaveform(feedback: controller.recordingFeedback, height: 23)
                     RecordingElapsedTime(feedback: controller.recordingFeedback)
-                } else {
+                } else if controller.activity == .starting {
                     InlayMark(size: 18)
                     Text("Starting").lineLimit(1)
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text(stageText).lineLimit(1).minimumScaleFactor(0.8)
                 }
             }
             .font(.system(size: 11, weight: .medium))
@@ -249,8 +252,14 @@ struct DictationHUD: View {
         }
     }
 
+    private var stageText: String {
+        let stage = controller.hudProgressText ?? hudLabel
+        return controller.pendingDictationCount > 1
+            ? "\(stage) · \(controller.pendingDictationCount - 1) more" : stage
+    }
+
     private func activateCircle() {
-        if controller.isBusy { controller.cancelDictation() }
+        if controller.isBusy { /* Processing is shown expanded; the ✕ button cancels. */ }
         else {
             if result.needsAttention { controller.onShowWindow?() }
             controller.dismissFeedback()

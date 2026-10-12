@@ -288,7 +288,7 @@ private final class DictationPanel: NSPanel {
 
     private func updateCompactState() {
         compactTask?.cancel()
-        if activity.isCapturing {
+        if activity.isBusy {
             compact = false
             updateFrame()
         } else {
