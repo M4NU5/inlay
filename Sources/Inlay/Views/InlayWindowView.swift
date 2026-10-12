@@ -235,6 +235,20 @@ struct DictationPage: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            if !controller.undeliveredResults.isEmpty {
+                HStack {
+                    Text("A dictation finished while Inlay was closed.")
+                        .font(.callout)
+                        .foregroundStyle(InlayPalette.ink)
+                    Spacer()
+                    Button("Copy") {
+                        if let record = controller.undeliveredResults.first {
+                            controller.copyUndeliveredResult(record)
+                        }
+                    }
+                }
+                .padding(.vertical, 6)
+            }
             ScrollView {
                 Text(controller.lastTranscript.isEmpty ? "Your next thought will appear here." : controller.lastTranscript)
                     .font(.body)

@@ -125,6 +125,7 @@ final class InlayController: ObservableObject {
     @Published private(set) var isSavingPreferences = false
     @Published private(set) var sharedPreferences: PreferencesSnapshot?
     @Published private(set) var generations: [GenerationRecord] = []
+    @Published private(set) var undeliveredResults: [GenerationRecord] = []
     @Published private(set) var isLoadingHistory = false
     @Published private(set) var hasMoreHistory = false
     @Published private(set) var historySourceFilter = "all"
@@ -142,6 +143,9 @@ final class InlayController: ObservableObject {
     let configuration: ConfigurationStore
     let microphones: MicrophonePreferencesStore
     let preferences: ClientPreferencesStore
+    private let pendingStore: PendingGenerationsStore
+    private var pendingEntries: [PendingGenerationEntry]
+    private var isReconcilingPending = false
 
     var isRecording: Bool { activity == .recording }
     var isCapturing: Bool { activity.isCapturing }
@@ -193,6 +197,7 @@ final class InlayController: ObservableObject {
         let salvaged: Bool
         var task: Task<Void, Never>?
         var sealed = false
+        var resolved = false
         /// Nil until the destination resolves; list continuation keys off its anchor.
         var target: (destination: InsertionDestination, anchor: DictationDestination?)?
 
@@ -232,6 +237,9 @@ final class InlayController: ObservableObject {
         self.audioDevices = audioDevices ?? AudioDeviceStore()
         self.serverClientFactory = serverClient
         preferences = ClientPreferencesStore(root: configuration.url.deletingLastPathComponent())
+        let loadedPendingStore = PendingGenerationsStore(root: configuration.url.deletingLastPathComponent())
+        pendingStore = loadedPendingStore
+        pendingEntries = loadedPendingStore.load()
         microphones = MicrophonePreferencesStore(configuration: configuration)
         permissions = startServices ? PermissionSnapshot.capture()
             : PermissionSnapshot(microphone: false, accessibility: false, inputMonitoring: false)
@@ -312,6 +320,7 @@ final class InlayController: ObservableObject {
                     hasMoreHistory = history.nextCursor != nil
                 }
             }
+            await reconcilePendingGenerations()
         } catch is CancellationError {
         } catch {
             guard endpoint == preferences.endpoint, !Task.isCancelled else { return }
@@ -328,6 +337,9 @@ final class InlayController: ObservableObject {
             return
         }
         continuationAnchors.removeAll()
+        pendingEntries = []
+        undeliveredResults = []
+        pendingStore.save(pendingEntries)
         serverHealth = nil
         sharedPreferences = nil
         generations = []
@@ -773,6 +785,72 @@ final class InlayController: ObservableObject {
         refreshHistory()
     }
 
+    private func addPendingEntry(id: UUID, finish: FinishGenerationRequest, isTest: Bool) {
+        pendingEntries.removeAll { $0.id == id }
+        pendingEntries.append(PendingGenerationEntry(
+            id: id, endpoint: preferences.endpoint,
+            inferenceFrames: finish.inferenceFrames, originalFrames: finish.originalFrames,
+            isTest: isTest, sealedAt: Date()))
+        pendingStore.save(pendingEntries)
+    }
+
+    private func removePendingEntry(_ id: UUID) {
+        pendingEntries.removeAll { $0.id == id }
+        undeliveredResults.removeAll { $0.id == id }
+        pendingStore.save(pendingEntries)
+    }
+
+    /// Surfaces takes that finished on the server while this app was not
+    /// tracking them. Completed results are copy-only here: never inserted.
+    private func reconcilePendingGenerations() async {
+        guard !isReconcilingPending, !pendingEntries.isEmpty else { return }
+        isReconcilingPending = true
+        defer { isReconcilingPending = false }
+        let cutoff = Date().addingTimeInterval(-7 * 24 * 60 * 60)
+        let stale = pendingEntries.filter { $0.sealedAt < cutoff }
+        for entry in stale { removePendingEntry(entry.id) }
+        guard let connection = try? client() else { return }
+        for entry in pendingEntries where entry.endpoint == preferences.endpoint {
+            guard let record = try? await connection.generation(entry.id) else { continue }
+            switch record.status {
+            case .completed:
+                if record.delivery == nil {
+                    if !undeliveredResults.contains(where: { $0.id == record.id }) {
+                        undeliveredResults.append(record)
+                    }
+                } else { removePendingEntry(entry.id) }
+            case .failed, .cancelled:
+                removePendingEntry(entry.id)
+            case .receiving:
+                do {
+                    _ = try await connection.finish(entry.id, value: FinishGenerationRequest(
+                        inferenceFrames: entry.inferenceFrames, originalFrames: entry.originalFrames))
+                } catch let ServerClientError.rejected(status, _) where (400..<500).contains(status) && ![408, 429].contains(status) {
+                    removePendingEntry(entry.id)
+                } catch {}
+            case .queued, .transcribing, .proofreading:
+                break
+            }
+        }
+    }
+
+    func copyUndeliveredResult(_ record: GenerationRecord) {
+        switch DictationClipboard.copy(record.finalText, to: .general) {
+        case .success:
+            lastTranscript = record.finalText
+            lastDelivery = "Copied to clipboard"
+            lastDeliveryStatus = .copied
+            removePendingEntry(record.id)
+            Task { [weak self] in
+                guard let connection = try? self?.client() else { return }
+                try? await connection.delivery(record.id, receipt: DeliveryReceipt(
+                    status: "copied", message: "Copied after relaunch"))
+            }
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func copyLastTranscript() {
         guard !lastTranscript.isEmpty, !isBusy else { return }
         switch DictationClipboard.copy(lastTranscript, to: .general) {
@@ -1000,6 +1078,7 @@ final class InlayController: ObservableObject {
             var capturedAudio: CapturedAudio?
             defer {
                 capturedAudio?.cleanup()
+                if pending.resolved { removePendingEntry(pending.id) }
                 pendingDictations.removeAll { $0 === pending }
                 if pendingDictations.isEmpty {
                     deliveryTail = nil
@@ -1039,6 +1118,7 @@ final class InlayController: ObservableObject {
                 finish.continuationID = sharesEarlierAnchor ? nil : anchor.flatMap { self.continuation(for: $0)?.generationID }
                 try Task.checkCancellation()
                 pending.sealed = true // The server may accept a seal whose response is interrupted.
+                addPendingEntry(id: id, finish: finish, isTest: test)
                 var result: GenerationRecord
                 do { result = try await connection.finish(id, value: finish) }
                 catch let ServerClientError.rejected(status, message) where (400..<500).contains(status) && ![408, 429].contains(status) {
@@ -1053,6 +1133,7 @@ final class InlayController: ObservableObject {
                 }
                 try Task.checkCancellation()
                 guard result.status == .completed else {
+                    pending.resolved = true // Terminal on the server; visible in History.
                     throw ServerClientError.rejected(422, result.error ?? "The server could not process this recording.")
                 }
                 // Processing and uploads overlap. Clipboard/paste transactions
@@ -1076,10 +1157,14 @@ final class InlayController: ObservableObject {
                     // A newer take owns the HUD and will replace this result.
                     errorMessage = "Earlier dictation: \(receipt.message ?? delivered.hudLabel)"
                 }
+                pending.resolved = true
                 refreshServer()
             } catch {
                 pending.upload.cancel(); pending.pipe.cancel(); pending.destination?.cancel()
-                if !pending.sealed { Task { try? await connection.cancel(id) } }
+                if !pending.sealed {
+                    pending.resolved = true
+                    Task { try? await connection.cancel(id) }
+                }
                 guard !Task.isCancelled else { return }
                 if let clientError = error as? ServerClientError, case .processingTimedOut = clientError {
                     // Not a failure: stop blocking later deliveries and let the
@@ -1208,7 +1293,10 @@ final class InlayController: ObservableObject {
     private func stopPendingDictations() {
         for pending in pendingDictations {
             pending.cancel()
-            if !pending.sealed { Task { try? await pending.client.cancel(pending.id) } }
+            if !pending.sealed {
+                removePendingEntry(pending.id)
+                Task { try? await pending.client.cancel(pending.id) }
+            }
         }
         pendingDictations.removeAll()
         deliveryTail = nil
