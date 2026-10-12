@@ -1252,7 +1252,13 @@ final class InlayController: ObservableObject {
         guard sessionID == session, !isCapturing else { return }
         switch generation.status {
         case .receiving: statusMessage = "Finishing upload…"; hudProgressText = "Uploading"
-        case .queued: statusMessage = "Queued on server…"; hudProgressText = "Queued"
+        case .queued:
+            if let position = generation.queuePosition {
+                statusMessage = "Queued on server… (#\(position))"
+                hudProgressText = "Queued #\(position)"
+            } else {
+                statusMessage = "Queued on server…"; hudProgressText = "Queued"
+            }
         case .transcribing: statusMessage = "Transcribing on server…"; hudProgressText = "Transcribing"
         case .proofreading: statusMessage = "Proofreading on server…"; hudProgressText = "Proofreading"
         case .completed: statusMessage = "Preparing result…"; hudProgressText = "Preparing"

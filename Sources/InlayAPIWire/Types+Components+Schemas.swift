@@ -1932,6 +1932,8 @@ extension Components {
             public var error: Swift.String?
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/progress`.
             public var progress: Swift.Double?
+            /// - Remark: Generated from `#/components/schemas/GenerationRecord/queuePosition`.
+            public var queuePosition: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/importedSource`.
             public var importedSource: Components.Schemas.ImportedSource?
             /// Creates a new `GenerationRecord`.
@@ -1964,6 +1966,7 @@ extension Components {
             ///   - delivery:
             ///   - error:
             ///   - progress:
+            ///   - queuePosition:
             ///   - importedSource:
             public init(
                 schemaVersion: Swift.Int,
@@ -1993,6 +1996,7 @@ extension Components {
                 delivery: Components.Schemas.DeliveryReceipt? = nil,
                 error: Swift.String? = nil,
                 progress: Swift.Double? = nil,
+                queuePosition: Swift.Int? = nil,
                 importedSource: Components.Schemas.ImportedSource? = nil
             ) {
                 self.schemaVersion = schemaVersion
@@ -2022,6 +2026,7 @@ extension Components {
                 self.delivery = delivery
                 self.error = error
                 self.progress = progress
+                self.queuePosition = queuePosition
                 self.importedSource = importedSource
             }
             public enum CodingKeys: String, CodingKey {
@@ -2052,6 +2057,7 @@ extension Components {
                 case delivery
                 case error
                 case progress
+                case queuePosition
                 case importedSource
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -2164,6 +2170,10 @@ extension Components {
                     Swift.Double.self,
                     forKey: .progress
                 )
+                self.queuePosition = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .queuePosition
+                )
                 self.importedSource = try container.decodeIfPresent(
                     Components.Schemas.ImportedSource.self,
                     forKey: .importedSource
@@ -2196,6 +2206,7 @@ extension Components {
                     "delivery",
                     "error",
                     "progress",
+                    "queuePosition",
                     "importedSource"
                 ])
             }

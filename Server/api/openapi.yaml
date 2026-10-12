@@ -1223,6 +1223,10 @@ components:
           type: "number"
           minimum: 0
           maximum: 1
+        queuePosition:
+          type: "integer"
+          minimum: 1
+          maximum: 9007199254740991
         importedSource:
           "$ref": "#/components/schemas/ImportedSource"
       required:

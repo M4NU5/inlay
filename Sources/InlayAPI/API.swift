@@ -352,6 +352,7 @@ public struct GenerationRecord: Codable, Equatable, Sendable, Identifiable {
     public var delivery: DeliveryReceipt?
     public var error: String?
     public var progress: Double?
+    public var queuePosition: Int?
     public var importedSource: ImportedSource?
     public var audioSeconds: Double { inferenceAudio?.duration ?? importedSource?.durationSeconds ?? 0 }
     public init(id: UUID = UUID(), requestID: UUID, device: DeviceIdentity, mode: GenerationMode = .dictation,

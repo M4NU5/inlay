@@ -563,6 +563,7 @@ export interface components {
       delivery?: components["schemas"]["DeliveryReceipt"];
       error?: string;
       progress?: number;
+      queuePosition?: number;
       importedSource?: components["schemas"]["ImportedSource"];
     };
     GenerationPage: {

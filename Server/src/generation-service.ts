@@ -54,6 +54,7 @@ import { maxInputCharacters, modelHints, processingRecord } from "./domain/corre
 const MAX_METADATA_BYTES = 1_048_576;
 const MAX_PREFERENCES_BYTES = 262_144;
 const MAX_CHUNK_BYTES = 1_048_576;
+const MAX_ACTIVE_GENERATIONS = 12;
 const RECEIVING_IDLE_MS = 120_000;
 const RECEIVING_TOTAL_MS = 900_000;
 const terminal = (record: GenerationRecord) =>
@@ -164,6 +165,7 @@ interface Watcher {
   done: boolean;
   lastVersion?: number;
   lastSentAt?: number;
+  lastQueuePosition?: number;
 }
 
 /** Durable mutations serialize per generation; shared state uses the global queue. Model work proceeds outside both. */
@@ -187,6 +189,7 @@ export class GenerationService {
   private generationQueues = new Map<string, Promise<unknown>>();
   private recordVersions = new Map<string, number>();
   private lastProgressYieldAt = new Map<string, number>();
+  private processingOrder: string[] = [];
   private importQueue: Promise<unknown> = Promise.resolve();
   private subscribers = new Map<string, Set<Watcher>>();
   private readonly imports: WisprFlowImports;
@@ -236,7 +239,23 @@ export class GenerationService {
   private getInternal(id: string) {
     const record = this.records.get(id.toUpperCase());
     if (!record) throw new ServiceError(404, "not_found", "Recording not found.");
-    return copy(record);
+    return this.decorate(copy(record));
+  }
+  /** Computes queuePosition on a copy only; it is never persisted (save strips it). */
+  private decorate(record: GenerationRecord): GenerationRecord {
+    delete record.queuePosition;
+    if (record.status === "queued") {
+      let position = 0;
+      for (const queuedID of this.processingOrder) {
+        if (this.records.get(queuedID)?.status !== "queued") continue;
+        position++;
+        if (queuedID === record.id) {
+          record.queuePosition = position;
+          break;
+        }
+      }
+    }
+    return record;
   }
   private async initialize() {
     const data = resolve(this.configuration.dataDirectory);
@@ -558,6 +577,13 @@ export class GenerationService {
           record.device.id === request.device.id,
       );
       if (existing) return copy(existing);
+      const active = [...this.records.values()].filter((record) => !terminal(record)).length;
+      if (active >= MAX_ACTIVE_GENERATIONS)
+        throw new ServiceError(
+          429,
+          "server_busy",
+          "The server is already processing the maximum number of recordings. Try again shortly.",
+        );
       const failure = this.speechLoadFailure(state);
       if (!state.available || failure) {
         this.beginWarmup();
@@ -882,7 +908,7 @@ export class GenerationService {
     }
     const items = sorted.slice(start, start + limit);
     return {
-      items: copy(items),
+      items: items.map((item) => this.decorate(copy(item))),
       nextCursor: start + items.length < sorted.length ? items.at(-1)?.id : undefined,
     };
   }
@@ -1221,6 +1247,7 @@ export class GenerationService {
     return copy(previous.continuation);
   }
   private enqueueProcessing(id: string, previous: DictationContinuation | undefined) {
+    if (!this.processingOrder.includes(id)) this.processingOrder.push(id);
     const enqueuedAt = performance.now();
     const controller = new AbortController();
     this.processingControllers.set(id, controller);
@@ -1235,6 +1262,7 @@ export class GenerationService {
       .catch((error) => logError("processing_chain_failed", error, { id }))
       .finally(() => {
         this.processingControllers.delete(id);
+        this.processingOrder = this.processingOrder.filter((queuedID) => queuedID !== id);
         this.beginWarmup();
       });
   }
@@ -1440,6 +1468,7 @@ export class GenerationService {
     }
   }
   private async save(record: GenerationRecord) {
+    delete record.queuePosition;
     const data = JSON.stringify(record);
     if (Buffer.byteLength(data) > MAX_METADATA_BYTES)
       throw new ServiceError(
@@ -1469,18 +1498,21 @@ export class GenerationService {
     }
   }
   private yieldTo(watcher: Watcher, record: GenerationRecord) {
+    const decorated = this.decorate(copy(record));
     const version = this.recordVersions.get(record.id) ?? 0;
     const nowMs = Date.now();
     if (
       !terminal(record) &&
       watcher.lastVersion === version &&
+      watcher.lastQueuePosition === decorated.queuePosition &&
       watcher.lastSentAt !== undefined &&
       nowMs - watcher.lastSentAt < 10_000
     )
       return;
-    watcher.queue.push(copy(record));
+    watcher.queue.push(decorated);
     if (watcher.queue.length > 8) watcher.queue.shift();
     watcher.lastVersion = version;
+    watcher.lastQueuePosition = decorated.queuePosition;
     watcher.lastSentAt = nowMs;
     watcher.wake?.();
   }
