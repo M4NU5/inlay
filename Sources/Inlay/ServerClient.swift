@@ -354,9 +354,15 @@ extension ServerClient {
     }
 
     func upload(_ stream: AsyncThrowingStream<CapturedAudioChunk, Error>, to id: UUID,
-                preserveOriginal: Bool) async throws -> FinishGenerationRequest {
+                preserveOriginal: Bool) async throws -> UploadOutcome {
         var inference = UploadBuffer(kind: .inference)
         var original = UploadBuffer(kind: .original)
+        func outcome(complete: Bool) -> UploadOutcome {
+            UploadOutcome(finish: FinishGenerationRequest(
+                inferenceFrames: complete ? inference.frames : inference.acknowledgedFrames,
+                originalFrames: preserveOriginal ? (complete ? original.frames : original.acknowledgedFrames) : nil),
+                complete: complete)
+        }
         for try await chunk in stream {
             try Task.checkCancellation()
             switch chunk.kind {
@@ -368,33 +374,58 @@ extension ServerClient {
             // Batch about half a second of samples, overlapping transfer with the
             // microphone while keeping HTTP overhead and memory bounded.
             if inference.data.count >= 32_000 {
-                try await flush(&inference, to: id)
-                try await flush(&original, to: id)
+                guard try await flush(&inference, to: id) else { return outcome(complete: false) }
+                guard try await flush(&original, to: id) else { return outcome(complete: false) }
             }
-            if original.data.count >= 768_000 { try await flush(&original, to: id) }
+            if original.data.count >= 768_000 {
+                guard try await flush(&original, to: id) else { return outcome(complete: false) }
+            }
         }
-        try await flush(&inference, to: id)
-        try await flush(&original, to: id)
-        return FinishGenerationRequest(inferenceFrames: inference.frames,
-                                       originalFrames: preserveOriginal ? original.frames : nil)
+        guard try await flush(&inference, to: id) else { return outcome(complete: false) }
+        guard try await flush(&original, to: id) else { return outcome(complete: false) }
+        return outcome(complete: true)
     }
 
-    private func flush(_ buffer: inout UploadBuffer, to id: UUID) async throws {
-        guard !buffer.data.isEmpty, let format = buffer.format else { return }
-        let query = [URLQueryItem(name: "sequence", value: String(buffer.sequence)),
+    /// Returns false when the flush ultimately failed (non-transient error or
+    /// the 60 s retry deadline passed); throws only on cancellation. Retries
+    /// re-send byte-identical content, which the server safely replays.
+    private func flush(_ buffer: inout UploadBuffer, to id: UUID) async throws -> Bool {
+        guard !buffer.data.isEmpty, let format = buffer.format else { return true }
+        let payload = buffer.data
+        let sequence = buffer.sequence
+        let expectedFrames = buffer.frames
+        let query = [URLQueryItem(name: "sequence", value: String(sequence)),
                      URLQueryItem(name: "sampleRate", value: String(format.sampleRate)),
                      URLQueryItem(name: "channels", value: String(format.channels))]
-        let request = try request(path: "v1/generations/\(id)/audio/\(buffer.kind.rawValue)", method: "POST",
-                                  body: buffer.data, contentType: "application/octet-stream", query: query)
-        let (data, response) = try await session.data(for: request)
-        try Self.validate(response, data: data)
-        let receipt = try InlayAPI.decodeWire(AudioChunkReceipt.self, from: data)
-        guard receipt.nextSequence == buffer.sequence + 1, receipt.frameCount == buffer.frames else {
-            throw ServerClientError.invalidResponse
+        let uploadRequest = try request(path: "v1/generations/\(id)/audio/\(buffer.kind.rawValue)", method: "POST",
+                                        body: payload, contentType: "application/octet-stream", query: query)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        var delay: Duration = .milliseconds(500)
+        while true {
+            do {
+                let (data, response) = try await session.data(for: uploadRequest)
+                try Self.validate(response, data: data)
+                let receipt = try InlayAPI.decodeWire(AudioChunkReceipt.self, from: data)
+                guard receipt.nextSequence == sequence + 1, receipt.frameCount == expectedFrames else {
+                    throw ServerClientError.invalidResponse
+                }
+                buffer.sequence = receipt.nextSequence
+                buffer.acknowledgedFrames = receipt.frameCount
+                buffer.data.removeAll(keepingCapacity: true)
+                return true
+            } catch {
+                try Task.checkCancellation()
+                guard Self.isTransient(error), ContinuousClock.now < deadline else { return false }
+                try await Task.sleep(for: delay)
+                delay = min(delay * 2, .seconds(8))
+            }
         }
-        buffer.sequence = receipt.nextSequence
-        buffer.data.removeAll(keepingCapacity: true)
     }
+}
+
+struct UploadOutcome: Sendable {
+    let finish: FinishGenerationRequest
+    let complete: Bool
 }
 
 private struct UploadBuffer {
@@ -402,6 +433,7 @@ private struct UploadBuffer {
     var data = Data()
     var format: AudioStreamFormat?
     var frames: Int64 = 0
+    var acknowledgedFrames: Int64 = 0
     var sequence = 0
 
     mutating func append(_ chunk: CapturedAudioChunk) throws {

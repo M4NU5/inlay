@@ -170,7 +170,7 @@ final class InlayController: ObservableObject {
     private var insertionRebases = ConfirmedInsertionRebases<InsertionTarget>()
     /// Released takes in recording order. The newest may own the HUD via sessionID.
     @Published private var pendingDictations: [PendingDictation] = []
-    private var uploadTask: Task<FinishGenerationRequest, Error>?
+    private var uploadTask: Task<UploadOutcome, Error>?
     private var uploadPipe: AudioChunkPipe?
     private var refreshTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
@@ -187,7 +187,7 @@ final class InlayController: ObservableObject {
         let session: UUID
         let id: UUID
         let client: ServerClient
-        let upload: Task<FinishGenerationRequest, Error>
+        let upload: Task<UploadOutcome, Error>
         let pipe: AudioChunkPipe
         let destination: InsertionDestinationCapture?
         var task: Task<Void, Never>?
@@ -195,7 +195,7 @@ final class InlayController: ObservableObject {
         /// Nil until the destination resolves; list continuation keys off its anchor.
         var target: (destination: InsertionDestination, anchor: DictationDestination?)?
 
-        init(session: UUID, id: UUID, client: ServerClient, upload: Task<FinishGenerationRequest, Error>,
+        init(session: UUID, id: UUID, client: ServerClient, upload: Task<UploadOutcome, Error>,
              pipe: AudioChunkPipe, destination: InsertionDestinationCapture?) {
             self.session = session; self.id = id; self.client = client; self.upload = upload
             self.pipe = pipe; self.destination = destination
@@ -984,7 +984,7 @@ final class InlayController: ObservableObject {
                 capturedAudio = audio
                 try Task.checkCancellation()
                 pending.pipe.finish()
-                var finish = try await pending.upload.value
+                var finish = try await pending.upload.value.finish
                 try Task.checkCancellation()
                 audio.cleanup()
                 capturedAudio = nil
