@@ -118,6 +118,9 @@ done
 cp Resources/*-LICENSE.txt THIRD_PARTY_NOTICES.md "$staging_dir/resources/"
 bun Server/scripts/licenses.ts "$staging_dir/resources/javascript-LICENSES.txt"
 cp Server/README.md "$staging_dir/README.md"
+if [[ "$server_platform" == Darwin ]]; then
+    cp Server/dev.davis.inlay.server-agent.plist "$staging_dir/"
+fi
 if [[ "$server_platform" == Linux ]]; then
     cp Server/inlay-server.service "$staging_dir/inlay-server.service"
 fi

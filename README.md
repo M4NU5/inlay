@@ -34,9 +34,12 @@ Use your own model paths if they are already installed. The script builds the se
 Follow the [server guide](Server/README.md) for macOS, Linux, or containers. On the client Mac, build and open only the app:
 
 ```sh
+./scripts/setup.sh
 ./scripts/build-app.sh
 open "build/Inlay.app"
 ```
+
+On the machine that also runs the server, `./scripts/install-service.sh` installs it as a LaunchAgent.
 
 Set its URL and token under **This Mac**. Use HTTPS for remote hosts, or HTTP with the server's literal Tailscale IP on your connected tailnet. The client needs no model weights or GPU for inference.
 
