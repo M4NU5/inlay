@@ -75,13 +75,13 @@ private final class WisprFlowPreparationGate: @unchecked Sendable {
 
 /// The desktop never owns a durable generation or a model process. A take has
 /// one accepted server generation, one bounded upload, and at most one delivery.
-@MainActor
 enum InsertionMode {
     case insertion
     case clipboardOnly
     case unavailable
 }
 
+@MainActor
 final class InlayController: ObservableObject {
     @Published var activity: DictationActivity = .idle
     let recordingFeedback = RecordingFeedback()
