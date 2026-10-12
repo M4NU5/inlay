@@ -76,6 +76,12 @@ private final class WisprFlowPreparationGate: @unchecked Sendable {
 /// The desktop never owns a durable generation or a model process. A take has
 /// one accepted server generation, one bounded upload, and at most one delivery.
 @MainActor
+enum InsertionMode {
+    case insertion
+    case clipboardOnly
+    case unavailable
+}
+
 final class InlayController: ObservableObject {
     @Published var activity: DictationActivity = .idle
     let recordingFeedback = RecordingFeedback()
@@ -181,6 +187,12 @@ final class InlayController: ObservableObject {
     }
     var isServerReady: Bool { serverHealth?.ready == true && serverHealth?.apiVersion == InlayAPI.version }
     var canTest: Bool { isServerReady && permissions.microphone && microphones.resolution.device != nil && !isCapturing }
+    var insertionMode: InsertionMode { Self.insertionMode(for: permissions) }
+    static func insertionMode(for snapshot: PermissionSnapshot) -> InsertionMode {
+        if snapshot.accessibility { return .insertion }
+        if snapshot.inputMonitoring { return .clipboardOnly }
+        return .unavailable
+    }
     var selectedInputName: String { microphones.resolution.device?.name ?? "No microphone available" }
     var allPermissionsGranted: Bool { permissions.microphone && permissions.accessibility }
     var onHUDVisibility: ((Bool) -> Void)?
@@ -249,6 +261,7 @@ final class InlayController: ObservableObject {
     }
     private var continuationAnchors: [ContinuationAnchor] = []
     private var isTestSession = false
+    private var sessionClipboardOnly = false
     private var updatingLogin = false
     private var hasInitialized = false
     private var isShuttingDown = false
@@ -1072,8 +1085,8 @@ final class InlayController: ObservableObject {
         guard let input = microphones.resolution.device, let deviceID = audioDevices.deviceID(for: input.uid) else {
             showError("No microphone is available. Connect an input and try again."); return false
         }
-        guard isTest || permissions.accessibility else {
-            showError("Allow Accessibility access so Inlay can insert text, then try again."); return false
+        guard isTest || Self.insertionMode(for: permissions) != .unavailable else {
+            showError("Allow Accessibility or Input Monitoring access, then try again."); return false
         }
         hudTask?.cancel(); errorMessage = nil; attentionPresented = false
         // Confirmed cursor moves matter only to takes that overlap them.
@@ -1081,6 +1094,7 @@ final class InlayController: ObservableObject {
         sessionID = UUID()
         let current = sessionID
         isTestSession = isTest
+        sessionClipboardOnly = !isTest && Self.insertionMode(for: permissions) == .clipboardOnly
         recordingClipboardChangeCount = NSPasteboard.general.changeCount
         insertionDestination = nil
         recordingInputName = input.name
@@ -1089,7 +1103,7 @@ final class InlayController: ObservableObject {
         statusMessage = "Connecting recording…"
         onHUDVisibility?(true)
         if muteOutputWhileRecording { outputMuter.mute() }
-        if !isTest {
+        if !isTest, !sessionClipboardOnly {
             let capture = TextInserter.beginDestinationCapture()
             destinationTask = capture
             Task { [weak self] in
@@ -1199,7 +1213,7 @@ final class InlayController: ObservableObject {
         let pending = PendingDictation(session: current, id: id, client: connection, upload: uploadTask,
                                        pipe: uploadPipe, destination: destinationTask, salvaged: salvaged)
         // Usually known at release, so a later take can continue a list in another field.
-        let knownDestination: InsertionDestination? = test || salvaged ? .clipboard : capturedDestination
+        let knownDestination: InsertionDestination? = test || salvaged || sessionClipboardOnly ? .clipboard : capturedDestination
         pending.target = knownDestination.map { Self.resolve($0, isTest: test, releasedAt: releasedAt) }
         pendingDictations.append(pending)
         activeGenerationID = nil; activeClient = nil; self.uploadTask = nil; self.uploadPipe = nil

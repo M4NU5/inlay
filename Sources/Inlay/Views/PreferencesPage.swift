@@ -173,8 +173,19 @@ private struct DevicePreferencesForm: View {
             Section {
                 PermissionRow(title: "Microphone", detail: "Capture audio while dictating.", granted: controller.permissions.microphone,
                               reviewGranted: true, action: controller.requestMicrophone)
-                PermissionRow(title: "Accessibility", detail: "Recognize your dictation key and insert text.", granted: controller.permissions.accessibility,
+                PermissionRow(title: "Accessibility", detail: "Insert text at your cursor and recognize your dictation key anywhere.", granted: controller.permissions.accessibility,
                               reviewGranted: true, action: controller.requestAccessibility)
+                PermissionRow(title: "Input Monitoring", detail: "Recognize your dictation key. With only this permission, dictations are copied, not inserted.", granted: controller.permissions.inputMonitoring,
+                              reviewGranted: true, action: controller.requestInputMonitoring)
+                if !controller.permissions.accessibility && controller.permissions.inputMonitoring {
+                    Text("Shortcut is on. Dictations will be copied, not inserted; paste with Command-V.")
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.muted)
+                } else if !controller.permissions.accessibility && !controller.permissions.inputMonitoring {
+                    Text("Shortcut is off. Allow Accessibility (insert anywhere) or Input Monitoring (copy mode).")
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.warning)
+                }
                 HStack {
                     PermissionHelpButton()
                     Spacer()
