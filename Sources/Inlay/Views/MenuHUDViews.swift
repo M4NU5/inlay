@@ -7,12 +7,6 @@ struct InlayMenuView: View {
     var openWindow: () -> Void
     var quit: () -> Void
 
-    private var idleDictationHint: String {
-        let key = controller.shortcut == .fn ? "fn" : controller.shortcut.title
-        let verb = controller.activationMode == .doubleTapToggle ? "Double tap" : "Press"
-        return "\(verb) \(key) to dictate"
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -33,8 +27,7 @@ struct InlayMenuView: View {
             }
             .frame(height: 28)
 
-            InlayMicrophoneTestButton(controller: controller, identifier: "menu.test",
-                idleTitle: idleDictationHint)
+            InlayMicrophoneTestButton(controller: controller, identifier: "menu.test")
             ForEach(controller.undeliveredResults, id: \.id) { record in
                 Button { controller.copyUndeliveredResult(record) } label: {
                     Label("Copy finished dictation", systemImage: "doc.badge.plus")
