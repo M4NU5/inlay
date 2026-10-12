@@ -96,10 +96,11 @@ if [[ "$server_platform" == Darwin ]]; then
         [[ -d "$bundle" ]] || continue
         ditto "$bundle" "$staging_dir/helpers/$(basename "$bundle")"
     done
-    codesign --force --sign - "$staging_dir/helpers/inlay-engine"
-    codesign --force --sign - "$staging_dir/helpers/inlay-text-engine"
+    sign_identity="${INLAY_CODESIGN_IDENTITY:--}"
+    codesign --force --sign "$sign_identity" "$staging_dir/helpers/inlay-engine"
+    codesign --force --sign "$sign_identity" "$staging_dir/helpers/inlay-text-engine"
     # Preserve Bun's JIT permissions when signing the bundled runtime.
-    codesign --force --sign - --entitlements Server/entitlements.plist "$staging_dir/inlay-server"
+    codesign --force --sign "$sign_identity" --entitlements Server/entitlements.plist "$staging_dir/inlay-server"
 fi
 cp "$vad_model" "$staging_dir/resources/silero-vad.bin"
 # Docker and service installs run the server as a different user than the builder.
