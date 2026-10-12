@@ -175,6 +175,9 @@ export class GenerationService {
   private warming = false;
   /** Why the last warmup could not load speech; undefined once it loads. */
   private speechLoadError?: string;
+  private proofLoadError?: string;
+  private warmupFailures = 0;
+  private nextWarmupAt = 0;
   private stopping = false;
   private timer?: ReturnType<typeof setInterval>;
   private queue: Promise<unknown> = Promise.resolve();
@@ -466,7 +469,7 @@ export class GenerationService {
           message: this.preferences.preferences.textCorrectionEnabled
             ? state.proofLoaded
               ? undefined
-              : "Unavailable; deterministic text is preserved."
+              : (this.proofLoadError ?? "Unavailable; deterministic text is preserved.")
             : "Disabled",
         },
         message,
@@ -497,7 +500,7 @@ export class GenerationService {
         );
       await atomicPrivateWrite(join(this.configuration.dataDirectory, "preferences.json"), data);
       this.preferences = next;
-      this.beginWarmup();
+      this.beginWarmup(true);
       return copy(next);
     });
   }
@@ -1425,8 +1428,9 @@ export class GenerationService {
     ])
       await rm(join(this.directory(id), name), { force: true }).catch(() => {});
   }
-  private beginWarmup() {
+  private beginWarmup(force = false) {
     if (this.stopping || this.warming || this.processingControllers.size) return;
+    if (!force && Date.now() < this.nextWarmupAt) return;
     this.warming = true;
     const controller = new AbortController();
     this.warmController = controller;
@@ -1435,15 +1439,39 @@ export class GenerationService {
       .then(
         () => {
           this.speechLoadError = undefined;
+          this.proofLoadError = undefined;
+          this.warmupFailures = 0;
+          this.nextWarmupAt = 0;
+          logInfo("warmup_succeeded");
         },
         async (error) => {
           // A cancelled take or shutdown can interrupt loading; that is not a failure.
           if (error instanceof InferenceError && error.code === "cancelled") return;
-          this.speechLoadError = (await this.inference.readiness(false)).speechLoaded
-            ? undefined
-            : error instanceof InferenceError && error.code === "unavailable"
+          const snapshot = await this.inference.readiness(false);
+          const unavailable = error instanceof InferenceError && error.code === "unavailable";
+          if (
+            snapshot.speechLoaded &&
+            this.preferences.preferences.textCorrectionEnabled &&
+            !snapshot.proofLoaded
+          ) {
+            this.proofLoadError = unavailable
               ? error.message
-              : "Speech model failed to load.";
+              : "Proofreading model failed to load.";
+            this.speechLoadError = undefined;
+          } else if (!snapshot.speechLoaded) {
+            this.speechLoadError = unavailable ? error.message : "Speech model failed to load.";
+          } else {
+            this.speechLoadError = undefined;
+            this.proofLoadError = undefined;
+          }
+          this.warmupFailures++;
+          const retryAfterMs = Math.min(300_000, 5_000 * 2 ** (this.warmupFailures - 1));
+          this.nextWarmupAt = Date.now() + retryAfterMs;
+          logWarn("warmup_failed", {
+            attempt: this.warmupFailures,
+            retryAfterMs,
+            speech: !snapshot.speechLoaded,
+          });
         },
       )
       .catch(() => {})
