@@ -51,6 +51,8 @@ import { maxInputCharacters, modelHints, processingRecord } from "./domain/corre
 const MAX_METADATA_BYTES = 1_048_576;
 const MAX_PREFERENCES_BYTES = 262_144;
 const MAX_CHUNK_BYTES = 1_048_576;
+const RECEIVING_IDLE_MS = 120_000;
+const RECEIVING_TOTAL_MS = 900_000;
 const terminal = (record: GenerationRecord) =>
   ["completed", "failed", "cancelled"].includes(record.status);
 const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -305,8 +307,8 @@ export class GenerationService {
       for (const record of this.records.values()) {
         if (
           record.status === "receiving" &&
-          (Date.now() - Date.parse(record.updatedAt) > 45_000 ||
-            Date.now() - Date.parse(record.createdAt) > 300_000)
+          (Date.now() - Date.parse(record.updatedAt) > RECEIVING_IDLE_MS ||
+            Date.now() - Date.parse(record.createdAt) > RECEIVING_TOTAL_MS)
         )
           await this.cancelRecord(record.id);
       }
@@ -573,6 +575,8 @@ export class GenerationService {
         } finally {
           await file.close();
         }
+        record.updatedAt = now();
+        this.records.set(id, record);
         return {
           nextSequence: upload.chunks.length,
           frameCount: upload.bytes / (format.channels * 4),
