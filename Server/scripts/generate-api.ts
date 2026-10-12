@@ -247,14 +247,24 @@ ${filesSwift}
     ]
 }
 `;
+    const formatTS = async (source: string, filepath: string) =>
+      format(source, { ...(await resolveConfig(filepath)), filepath });
     const outputs: [string, string, string][] = [
-      [join(serverDirectory, "src/generated/shared.ts"), ts, "shared.ts"],
+      [
+        join(serverDirectory, "src/generated/shared.ts"),
+        await formatTS(ts, join(serverDirectory, "src/generated/shared.ts")),
+        "shared.ts",
+      ],
       [
         join(repositoryDirectory, "Sources/InlayAPI/GeneratedShared.swift"),
         swiftShared,
         "GeneratedShared.swift",
       ],
-      [join(serverDirectory, "src/generated/model-pins.ts"), tsPins, "model-pins.ts"],
+      [
+        join(serverDirectory, "src/generated/model-pins.ts"),
+        await formatTS(tsPins, join(serverDirectory, "src/generated/model-pins.ts")),
+        "model-pins.ts",
+      ],
       [
         join(repositoryDirectory, "Sources/InlayCore/GeneratedModelPins.swift"),
         swiftPins,
