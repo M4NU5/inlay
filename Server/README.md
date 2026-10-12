@@ -56,26 +56,17 @@ Parakeet automatically recognizes 25 European languages. The language preference
 The MLX directory must contain exactly the six files listed below. Download the pinned revision:
 
 ```sh
-(
-  set -e
-  inlay_qwen_dir="$PWD/.local/models/Qwen3-4B-Instruct-2507-MLX-4bit"
-  inlay_qwen_url="https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b"
-  mkdir -p "$inlay_qwen_dir"
-  for file in model.safetensors config.json tokenizer.json tokenizer_config.json generation_config.json chat_template.jinja; do
-    curl --fail --location --retry 3 --output "$inlay_qwen_dir/$file" "$inlay_qwen_url/$file"
-  done
-)
+INLAY_MODEL_DIR="$PWD/.local/models" ./scripts/download-text-model.sh
 ```
+
+The script verifies every file's size and SHA-256 and fails if the directory holds anything beyond the six pinned files.
 
 `Sources/InlayCore/TextModel.swift` defines the six-file size/hash manifest; the MLX helper verifies it before becoming ready. Use regular files, with no extra files or symlinks in the model directory.
 
 ### Qwen on Linux
 
 ```sh
-mkdir -p .local/models
-curl --fail --location --retry 3 \
-  --output .local/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
-  https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+INLAY_MODEL_DIR="$PWD/.local/models" ./scripts/download-text-model.sh --linux
 ```
 
 Expected size: 2,497,281,120 bytes. SHA-256: `3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597`. The server verifies both before loading.
