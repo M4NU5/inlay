@@ -162,9 +162,11 @@ interface Watcher {
   queue: GenerationRecord[];
   wake?: () => void;
   done: boolean;
+  lastVersion?: number;
+  lastSentAt?: number;
 }
 
-/** All durable mutations share one queue. Model work proceeds outside it. */
+/** Durable mutations serialize per generation; shared state uses the global queue. Model work proceeds outside both. */
 export class GenerationService {
   private preferences: PreferencesSnapshot = defaultPreferences();
   private records = new Map<string, GenerationRecord>();
@@ -183,6 +185,8 @@ export class GenerationService {
   private timer?: ReturnType<typeof setInterval>;
   private queue: Promise<unknown> = Promise.resolve();
   private generationQueues = new Map<string, Promise<unknown>>();
+  private recordVersions = new Map<string, number>();
+  private lastProgressYieldAt = new Map<string, number>();
   private importQueue: Promise<unknown> = Promise.resolve();
   private subscribers = new Map<string, Set<Watcher>>();
   private readonly imports: WisprFlowImports;
@@ -893,7 +897,12 @@ export class GenerationService {
           "stream_limit",
           "Too many connections are watching this recording.",
         );
-      const watcher: Watcher = { queue: [record], done: terminal(record) };
+      const watcher: Watcher = {
+        queue: [record],
+        done: terminal(record),
+        lastVersion: this.recordVersions.get(record.id) ?? 0,
+        lastSentAt: Date.now(),
+      };
       if (!watcher.done) {
         group.add(watcher);
         this.subscribers.set(id, group);
@@ -1443,6 +1452,7 @@ export class GenerationService {
   }
   private publish(record: GenerationRecord) {
     this.records.set(record.id.toUpperCase(), copy(record));
+    this.recordVersions.set(record.id, (this.recordVersions.get(record.id) ?? 0) + 1);
     const group = this.subscribers.get(record.id);
     if (group)
       for (const watcher of group) {
@@ -1452,17 +1462,38 @@ export class GenerationService {
           watcher.wake?.();
         }
       }
-    if (terminal(record)) this.subscribers.delete(record.id);
+    if (terminal(record)) {
+      this.subscribers.delete(record.id);
+      this.recordVersions.delete(record.id);
+      this.lastProgressYieldAt.delete(record.id);
+    }
   }
   private yieldTo(watcher: Watcher, record: GenerationRecord) {
+    const version = this.recordVersions.get(record.id) ?? 0;
+    const nowMs = Date.now();
+    if (
+      !terminal(record) &&
+      watcher.lastVersion === version &&
+      watcher.lastSentAt !== undefined &&
+      nowMs - watcher.lastSentAt < 10_000
+    )
+      return;
     watcher.queue.push(copy(record));
     if (watcher.queue.length > 8) watcher.queue.shift();
+    watcher.lastVersion = version;
+    watcher.lastSentAt = nowMs;
     watcher.wake?.();
   }
   private progress(id: string, value: number) {
     const record = this.records.get(id);
     if (!record || record.status !== "transcribing" || !Number.isFinite(value)) return;
-    record.progress = Math.max(0, Math.min(1, value));
+    const next = Math.max(0, Math.min(1, value));
+    if (record.progress === next) return;
+    record.progress = next;
+    this.recordVersions.set(id, (this.recordVersions.get(id) ?? 0) + 1);
+    const nowMs = Date.now();
+    if (next < 1 && nowMs - (this.lastProgressYieldAt.get(id) ?? 0) < 250) return;
+    this.lastProgressYieldAt.set(id, nowMs);
     for (const watcher of this.subscribers.get(id) ?? []) this.yieldTo(watcher, record);
   }
   private async cleanSealPartials(id: string) {
