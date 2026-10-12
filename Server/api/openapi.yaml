@@ -132,6 +132,36 @@ paths:
           required: true
           schema:
             "$ref": "#/components/schemas/UUID"
+  "/v1/storage":
+    get:
+      operationId: "getStorageUsage"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/StorageUsage"
+        default:
+          "$ref": "#/components/responses/APIError"
+  "/v1/storage/purge-audio":
+    post:
+      operationId: "purgeAudio"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/PurgeAudioRequest"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/PurgeAudioResult"
+        default:
+          "$ref": "#/components/responses/APIError"
   "/v1/generations":
     get:
       operationId: "listGenerations"
@@ -348,6 +378,20 @@ paths:
             schema:
               "$ref": "#/components/schemas/DeliveryReceipt"
         x-maximumBytes: 262144
+      parameters:
+        - name: "id"
+          in: "path"
+          required: true
+          schema:
+            "$ref": "#/components/schemas/UUID"
+  "/v1/generations/{id}/audio":
+    delete:
+      operationId: "deleteGenerationAudio"
+      responses:
+        "204":
+          description: "Audio deleted"
+        default:
+          "$ref": "#/components/responses/APIError"
       parameters:
         - name: "id"
           in: "path"
@@ -676,6 +720,69 @@ components:
           maxItems: 32
       required:
         - "lists"
+    StorageUsage:
+      type: "object"
+      additionalProperties: false
+      properties:
+        generationCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        audioByteCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        inferenceByteCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        originalByteCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        oldestAudioAt:
+          type: "string"
+          format: "date-time"
+        freeByteCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        audioRetentionDays:
+          type: "integer"
+          minimum: 0
+          maximum: 3650
+      required:
+        - "generationCount"
+        - "audioByteCount"
+        - "inferenceByteCount"
+        - "originalByteCount"
+        - "freeByteCount"
+        - "audioRetentionDays"
+    PurgeAudioRequest:
+      type: "object"
+      additionalProperties: false
+      properties:
+        olderThanDays:
+          type: "integer"
+          minimum: 0
+          maximum: 3650
+        kind:
+          "$ref": "#/components/schemas/AudioKind"
+    PurgeAudioResult:
+      type: "object"
+      additionalProperties: false
+      properties:
+        purgedRecordCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+        freedByteCount:
+          type: "integer"
+          minimum: 0
+          maximum: 9007199254740991
+      required:
+        - "purgedRecordCount"
+        - "freedByteCount"
     DeviceSummary:
       type: "object"
       additionalProperties: false
@@ -778,6 +885,11 @@ components:
           type: "boolean"
         keepOriginalAudio:
           type: "boolean"
+        audioRetentionDays:
+          type: "integer"
+          minimum: 0
+          maximum: 3650
+          description: "Days to keep recording audio; 0 keeps it forever. Missing values use 90."
       required:
         - "language"
         - "vocabulary"

@@ -10,6 +10,7 @@ import type {
   CreateGenerationRequest,
   DeliveryReceipt,
   EnrollDeviceRequest,
+  PurgeAudioRequest,
   DictationContinuation,
   FinishGenerationRequest,
   GenerationPage,
@@ -37,6 +38,7 @@ import {
   readRegularFile,
   requireDiskSpace,
   requireDiskSpaceFor,
+  freeBytes,
   requireRegularDirectory,
   syncDirectory,
 } from "./storage.ts";
@@ -93,6 +95,7 @@ export const defaultPreferences = (): PreferencesSnapshot => ({
     dictionary: copy(defaultDictionary),
     textCorrectionEnabled: true,
     keepOriginalAudio: true,
+    audioRetentionDays: 90,
   },
 });
 export function preferencesValidationError(preferences: ServerPreferences) {
@@ -119,6 +122,12 @@ export function preferencesValidationError(preferences: ServerPreferences) {
   )
     return "Choose a supported language.";
   if (!preferences.proofreadingPrompt.trim()) return "The cleanup system prompt cannot be empty.";
+  if (
+    !Number.isInteger(preferences.audioRetentionDays) ||
+    preferences.audioRetentionDays < 0 ||
+    preferences.audioRetentionDays > 3650
+  )
+    return "Choose an audio retention between 0 (keep forever) and 3650 days.";
   if (
     Buffer.byteLength(preferences.proofreadingPrompt) > 4096 ||
     preferences.proofreadingPrompt.includes("\0")
@@ -149,6 +158,7 @@ function normalizePreferences(
     ...value,
     dictionary: dictionary.value!,
     proofreadingPrompt: value.proofreadingPrompt ?? defaultProofreadingPrompt,
+    audioRetentionDays: value.audioRetentionDays ?? 90,
   };
 }
 
@@ -196,6 +206,7 @@ export class GenerationService {
   private nextWarmupAt = 0;
   private stopping = false;
   private timer?: ReturnType<typeof setInterval>;
+  private lastRetentionSweep = 0;
   private queue: Promise<unknown> = Promise.resolve();
   private generationQueues = new Map<string, Promise<unknown>>();
   private recordVersions = new Map<string, number>();
@@ -444,6 +455,10 @@ export class GenerationService {
   start() {
     if (this.stopping || this.timer) return;
     this.beginWarmup();
+    this.lastRetentionSweep = Date.now();
+    void this.mutate(() => this.sweepAudioRetention()).catch((error) =>
+      logError("retention_sweep_failed", error),
+    );
     this.timer = setInterval(() => {
       void this.tick().catch((error) => logError("tick_failed", error));
     }, 2000);
@@ -471,6 +486,10 @@ export class GenerationService {
         const record = this.records.get(snapshot.id);
         if (record?.status === "receiving") await this.cancelRecord(record.id);
       });
+    }
+    if (Date.now() - this.lastRetentionSweep >= 86_400_000) {
+      this.lastRetentionSweep = Date.now();
+      await this.mutate(() => this.sweepAudioRetention());
     }
   }
   async shutdown() {
@@ -1201,6 +1220,91 @@ export class GenerationService {
       await rm(this.directory(record.id), { recursive: true });
       this.records.delete(record.id);
       this.imports.removeRecord(record);
+    });
+  }
+  private async purgeAudio(record: GenerationRecord, kinds: AudioKind[]) {
+    let freed = 0;
+    let changed = false;
+    for (const kind of kinds) {
+      const field = kind === "inference" ? "inferenceAudio" : "originalAudio";
+      const artifact = record[field];
+      if (!artifact) continue;
+      await rm(join(this.directory(record.id), `${kind}.wav`), { force: true });
+      freed += artifact.byteCount;
+      delete record[field];
+      changed = true;
+    }
+    if (changed) await this.save(record);
+    return freed;
+  }
+  private async sweepAudioRetention() {
+    const days = this.preferences.preferences.audioRetentionDays;
+    if (days === 0) return;
+    const cutoff = Date.now() - days * 86_400_000;
+    for (const record of this.records.values()) {
+      if (!terminal(record) || Date.parse(record.createdAt) >= cutoff) continue;
+      if (!record.inferenceAudio && !record.originalAudio) continue;
+      try {
+        await this.purgeAudio(record, ["inference", "original"]);
+      } catch (error) {
+        logWarn("retention_purge_failed", { id: record.id }, error);
+      }
+    }
+  }
+  async storageUsage() {
+    let inferenceByteCount = 0;
+    let originalByteCount = 0;
+    let oldestAudioAt: string | undefined;
+    for (const record of this.records.values()) {
+      if (record.inferenceAudio) inferenceByteCount += record.inferenceAudio.byteCount;
+      if (record.originalAudio) originalByteCount += record.originalAudio.byteCount;
+      if (
+        (record.inferenceAudio || record.originalAudio) &&
+        (oldestAudioAt === undefined || record.createdAt < oldestAudioAt)
+      )
+        oldestAudioAt = record.createdAt;
+    }
+    return {
+      generationCount: this.records.size,
+      audioByteCount: inferenceByteCount + originalByteCount,
+      inferenceByteCount,
+      originalByteCount,
+      oldestAudioAt,
+      freeByteCount: Number(await freeBytes(this.configuration.dataDirectory)),
+      audioRetentionDays: this.preferences.preferences.audioRetentionDays,
+    };
+  }
+  purgeAllAudio(request: PurgeAudioRequest) {
+    return this.mutate(async () => {
+      const cutoff =
+        request.olderThanDays === undefined
+          ? undefined
+          : Date.now() - request.olderThanDays * 86_400_000;
+      const kinds: AudioKind[] = request.kind ? [request.kind] : ["inference", "original"];
+      let purgedRecordCount = 0;
+      let freedByteCount = 0;
+      for (const record of this.records.values()) {
+        if (!terminal(record)) continue;
+        if (cutoff !== undefined && Date.parse(record.createdAt) >= cutoff) continue;
+        const freed = await this.purgeAudio(record, kinds);
+        if (freed > 0) {
+          purgedRecordCount++;
+          freedByteCount += freed;
+        }
+      }
+      return { purgedRecordCount, freedByteCount };
+    });
+  }
+  deleteAudio(id: string) {
+    return this.withGenerationLock(id, async () => {
+      const record = this.getInternal(id);
+      if (!terminal(record))
+        throw new ServiceError(
+          409,
+          "generation_active",
+          "Cancel or finish a recording before deleting its audio.",
+        );
+      await this.purgeAudio(record, ["inference", "original"]);
     });
   }
   artifact(id: string, filename: string) {

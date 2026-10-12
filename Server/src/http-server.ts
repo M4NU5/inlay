@@ -152,6 +152,10 @@ export function createHTTPServer(service: GenerationService) {
     return reply.code(204).send();
   });
   app.get("/v1/preferences", () => service.getPreferences());
+  app.get("/v1/storage", () => service.storageUsage());
+  app.post("/v1/storage/purge-audio", (request) =>
+    service.purgeAllAudio(validateBody("PurgeAudioRequest", request.body)),
+  );
   app.put("/v1/preferences", (request) =>
     service.updatePreferences(validateBody("PreferencesSnapshot", request.body)),
   );
@@ -227,6 +231,10 @@ export function createHTTPServer(service: GenerationService) {
       deviceIDOf(request),
     ),
   );
+  app.delete<{ Params: IDParams }>("/v1/generations/:id/audio", async (request, reply) => {
+    await service.deleteAudio(identifier(request.params.id));
+    return reply.code(204).send();
+  });
   app.delete<{ Params: IDParams }>("/v1/generations/:id", async (request, reply) => {
     await service.delete(identifier(request.params.id));
     return reply.code(204).send();

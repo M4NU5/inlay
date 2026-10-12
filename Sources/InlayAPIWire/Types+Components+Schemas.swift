@@ -206,6 +206,175 @@ extension Components {
                 ])
             }
         }
+        /// - Remark: Generated from `#/components/schemas/StorageUsage`.
+        public struct StorageUsage: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/StorageUsage/generationCount`.
+            public var generationCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/StorageUsage/audioByteCount`.
+            public var audioByteCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/StorageUsage/inferenceByteCount`.
+            public var inferenceByteCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/StorageUsage/originalByteCount`.
+            public var originalByteCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/StorageUsage/oldestAudioAt`.
+            public var oldestAudioAt: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/StorageUsage/freeByteCount`.
+            public var freeByteCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/StorageUsage/audioRetentionDays`.
+            public var audioRetentionDays: Swift.Int
+            /// Creates a new `StorageUsage`.
+            ///
+            /// - Parameters:
+            ///   - generationCount:
+            ///   - audioByteCount:
+            ///   - inferenceByteCount:
+            ///   - originalByteCount:
+            ///   - oldestAudioAt:
+            ///   - freeByteCount:
+            ///   - audioRetentionDays:
+            public init(
+                generationCount: Swift.Int,
+                audioByteCount: Swift.Int,
+                inferenceByteCount: Swift.Int,
+                originalByteCount: Swift.Int,
+                oldestAudioAt: Foundation.Date? = nil,
+                freeByteCount: Swift.Int,
+                audioRetentionDays: Swift.Int
+            ) {
+                self.generationCount = generationCount
+                self.audioByteCount = audioByteCount
+                self.inferenceByteCount = inferenceByteCount
+                self.originalByteCount = originalByteCount
+                self.oldestAudioAt = oldestAudioAt
+                self.freeByteCount = freeByteCount
+                self.audioRetentionDays = audioRetentionDays
+            }
+            public enum CodingKeys: String, CodingKey {
+                case generationCount
+                case audioByteCount
+                case inferenceByteCount
+                case originalByteCount
+                case oldestAudioAt
+                case freeByteCount
+                case audioRetentionDays
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.generationCount = try container.decode(
+                    Swift.Int.self,
+                    forKey: .generationCount
+                )
+                self.audioByteCount = try container.decode(
+                    Swift.Int.self,
+                    forKey: .audioByteCount
+                )
+                self.inferenceByteCount = try container.decode(
+                    Swift.Int.self,
+                    forKey: .inferenceByteCount
+                )
+                self.originalByteCount = try container.decode(
+                    Swift.Int.self,
+                    forKey: .originalByteCount
+                )
+                self.oldestAudioAt = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .oldestAudioAt
+                )
+                self.freeByteCount = try container.decode(
+                    Swift.Int.self,
+                    forKey: .freeByteCount
+                )
+                self.audioRetentionDays = try container.decode(
+                    Swift.Int.self,
+                    forKey: .audioRetentionDays
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "generationCount",
+                    "audioByteCount",
+                    "inferenceByteCount",
+                    "originalByteCount",
+                    "oldestAudioAt",
+                    "freeByteCount",
+                    "audioRetentionDays"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/PurgeAudioRequest`.
+        public struct PurgeAudioRequest: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PurgeAudioRequest/olderThanDays`.
+            public var olderThanDays: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/PurgeAudioRequest/kind`.
+            public var kind: Components.Schemas.AudioKind?
+            /// Creates a new `PurgeAudioRequest`.
+            ///
+            /// - Parameters:
+            ///   - olderThanDays:
+            ///   - kind:
+            public init(
+                olderThanDays: Swift.Int? = nil,
+                kind: Components.Schemas.AudioKind? = nil
+            ) {
+                self.olderThanDays = olderThanDays
+                self.kind = kind
+            }
+            public enum CodingKeys: String, CodingKey {
+                case olderThanDays
+                case kind
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.olderThanDays = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .olderThanDays
+                )
+                self.kind = try container.decodeIfPresent(
+                    Components.Schemas.AudioKind.self,
+                    forKey: .kind
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "olderThanDays",
+                    "kind"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/PurgeAudioResult`.
+        public struct PurgeAudioResult: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PurgeAudioResult/purgedRecordCount`.
+            public var purgedRecordCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PurgeAudioResult/freedByteCount`.
+            public var freedByteCount: Swift.Int
+            /// Creates a new `PurgeAudioResult`.
+            ///
+            /// - Parameters:
+            ///   - purgedRecordCount:
+            ///   - freedByteCount:
+            public init(
+                purgedRecordCount: Swift.Int,
+                freedByteCount: Swift.Int
+            ) {
+                self.purgedRecordCount = purgedRecordCount
+                self.freedByteCount = freedByteCount
+            }
+            public enum CodingKeys: String, CodingKey {
+                case purgedRecordCount
+                case freedByteCount
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.purgedRecordCount = try container.decode(
+                    Swift.Int.self,
+                    forKey: .purgedRecordCount
+                )
+                self.freedByteCount = try container.decode(
+                    Swift.Int.self,
+                    forKey: .freedByteCount
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "purgedRecordCount",
+                    "freedByteCount"
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/DeviceSummary`.
         public struct DeviceSummary: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/DeviceSummary/id`.
@@ -458,6 +627,10 @@ extension Components {
             public var textCorrectionEnabled: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/ServerPreferences/keepOriginalAudio`.
             public var keepOriginalAudio: Swift.Bool
+            /// Days to keep recording audio; 0 keeps it forever. Missing values use 90.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServerPreferences/audioRetentionDays`.
+            public var audioRetentionDays: Swift.Int?
             /// Creates a new `ServerPreferences`.
             ///
             /// - Parameters:
@@ -467,13 +640,15 @@ extension Components {
             ///   - dictionary:
             ///   - textCorrectionEnabled:
             ///   - keepOriginalAudio:
+            ///   - audioRetentionDays: Days to keep recording audio; 0 keeps it forever. Missing values use 90.
             public init(
                 language: Components.Schemas.ServerPreferences.LanguagePayload,
                 proofreadingPrompt: Swift.String? = nil,
                 vocabulary: Swift.String,
                 dictionary: Components.Schemas.PersonalDictionary,
                 textCorrectionEnabled: Swift.Bool,
-                keepOriginalAudio: Swift.Bool
+                keepOriginalAudio: Swift.Bool,
+                audioRetentionDays: Swift.Int? = nil
             ) {
                 self.language = language
                 self.proofreadingPrompt = proofreadingPrompt
@@ -481,6 +656,7 @@ extension Components {
                 self.dictionary = dictionary
                 self.textCorrectionEnabled = textCorrectionEnabled
                 self.keepOriginalAudio = keepOriginalAudio
+                self.audioRetentionDays = audioRetentionDays
             }
             public enum CodingKeys: String, CodingKey {
                 case language
@@ -489,6 +665,7 @@ extension Components {
                 case dictionary
                 case textCorrectionEnabled
                 case keepOriginalAudio
+                case audioRetentionDays
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -516,13 +693,18 @@ extension Components {
                     Swift.Bool.self,
                     forKey: .keepOriginalAudio
                 )
+                self.audioRetentionDays = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .audioRetentionDays
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "language",
                     "proofreadingPrompt",
                     "vocabulary",
                     "dictionary",
                     "textCorrectionEnabled",
-                    "keepOriginalAudio"
+                    "keepOriginalAudio",
+                    "audioRetentionDays"
                 ])
             }
         }

@@ -56,6 +56,40 @@ public struct EnrollDeviceResponse: Codable, Equatable, Sendable {
     public init(device: DeviceSummary, token: String) { self.device = device; self.token = token }
 }
 
+public struct StorageUsage: Codable, Equatable, Sendable {
+    public var generationCount: Int
+    public var audioByteCount: Int64
+    public var inferenceByteCount: Int64
+    public var originalByteCount: Int64
+    public var oldestAudioAt: Date?
+    public var freeByteCount: Int64
+    public var audioRetentionDays: Int
+    public init(generationCount: Int, audioByteCount: Int64, inferenceByteCount: Int64,
+                originalByteCount: Int64, oldestAudioAt: Date? = nil, freeByteCount: Int64,
+                audioRetentionDays: Int) {
+        self.generationCount = generationCount; self.audioByteCount = audioByteCount
+        self.inferenceByteCount = inferenceByteCount; self.originalByteCount = originalByteCount
+        self.oldestAudioAt = oldestAudioAt; self.freeByteCount = freeByteCount
+        self.audioRetentionDays = audioRetentionDays
+    }
+}
+
+public struct PurgeAudioRequest: Codable, Equatable, Sendable {
+    public var olderThanDays: Int?
+    public var kind: AudioKind?
+    public init(olderThanDays: Int? = nil, kind: AudioKind? = nil) {
+        self.olderThanDays = olderThanDays; self.kind = kind
+    }
+}
+
+public struct PurgeAudioResult: Codable, Equatable, Sendable {
+    public var purgedRecordCount: Int
+    public var freedByteCount: Int64
+    public init(purgedRecordCount: Int, freedByteCount: Int64) {
+        self.purgedRecordCount = purgedRecordCount; self.freedByteCount = freedByteCount
+    }
+}
+
 public struct ServerPreferences: Codable, Equatable, Sendable {
     public var language: String
     public var proofreadingPrompt: String
@@ -63,6 +97,7 @@ public struct ServerPreferences: Codable, Equatable, Sendable {
     public var dictionary: PersonalDictionary
     public var textCorrectionEnabled: Bool
     public var keepOriginalAudio: Bool
+    public var audioRetentionDays: Int
     public static let maximumProofreadingPromptBytes = 4096
     public static let maximumVocabularyTermBytes = 16_384
     public static let defaultProofreadingPrompt = """
@@ -86,13 +121,13 @@ public struct ServerPreferences: Codable, Equatable, Sendable {
     public static let supportedLanguages = ["en", "auto", "es", "fr", "de", "it", "pt", "nl", "ja", "zh", "ko", "hi", "ar", "pl", "ru", "uk", "sv"]
     public init(language: String = "en", proofreadingPrompt: String = Self.defaultProofreadingPrompt, vocabulary: String = "",
                 dictionary: PersonalDictionary = .default, textCorrectionEnabled: Bool = true,
-                keepOriginalAudio: Bool = true) {
+                keepOriginalAudio: Bool = true, audioRetentionDays: Int = 90) {
         self.language = language; self.proofreadingPrompt = proofreadingPrompt; self.vocabulary = vocabulary
         self.dictionary = dictionary; self.textCorrectionEnabled = textCorrectionEnabled
-        self.keepOriginalAudio = keepOriginalAudio
+        self.keepOriginalAudio = keepOriginalAudio; self.audioRetentionDays = audioRetentionDays
     }
     private enum CodingKeys: String, CodingKey {
-        case language, proofreadingPrompt, vocabulary, dictionary, textCorrectionEnabled, keepOriginalAudio
+        case language, proofreadingPrompt, vocabulary, dictionary, textCorrectionEnabled, keepOriginalAudio, audioRetentionDays
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -102,6 +137,7 @@ public struct ServerPreferences: Codable, Equatable, Sendable {
         dictionary = try values.decode(PersonalDictionary.self, forKey: .dictionary)
         textCorrectionEnabled = try values.decode(Bool.self, forKey: .textCorrectionEnabled)
         keepOriginalAudio = try values.decode(Bool.self, forKey: .keepOriginalAudio)
+        audioRetentionDays = try values.decodeIfPresent(Int.self, forKey: .audioRetentionDays) ?? 90
     }
     public var validationError: String? {
         if !Self.supportedLanguages.contains(language) { return "Choose a supported language." }

@@ -36,6 +36,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /v1/devices/{id}`.
     /// - Remark: Generated from `#/paths//v1/devices/{id}/delete(revokeDevice)`.
     func revokeDevice(_ input: Operations.RevokeDevice.Input) async throws -> Operations.RevokeDevice.Output
+    /// - Remark: HTTP `GET /v1/storage`.
+    /// - Remark: Generated from `#/paths//v1/storage/get(getStorageUsage)`.
+    func getStorageUsage(_ input: Operations.GetStorageUsage.Input) async throws -> Operations.GetStorageUsage.Output
+    /// - Remark: HTTP `POST /v1/storage/purge-audio`.
+    /// - Remark: Generated from `#/paths//v1/storage/purge-audio/post(purgeAudio)`.
+    func purgeAudio(_ input: Operations.PurgeAudio.Input) async throws -> Operations.PurgeAudio.Output
     /// - Remark: HTTP `GET /v1/generations`.
     /// - Remark: Generated from `#/paths//v1/generations/get(listGenerations)`.
     func listGenerations(_ input: Operations.ListGenerations.Input) async throws -> Operations.ListGenerations.Output
@@ -63,6 +69,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/generations/{id}/delivery`.
     /// - Remark: Generated from `#/paths//v1/generations/{id}/delivery/post(recordDelivery)`.
     func recordDelivery(_ input: Operations.RecordDelivery.Input) async throws -> Operations.RecordDelivery.Output
+    /// - Remark: HTTP `DELETE /v1/generations/{id}/audio`.
+    /// - Remark: Generated from `#/paths//v1/generations/{id}/audio/delete(deleteGenerationAudio)`.
+    func deleteGenerationAudio(_ input: Operations.DeleteGenerationAudio.Input) async throws -> Operations.DeleteGenerationAudio.Output
     /// A bounded NDJSON stream of complete GenerationRecord values, with the latest record repeated as a two-second heartbeat. Ends after a terminal record.
     ///
     /// - Remark: HTTP `GET /v1/generations/{id}/events`.
@@ -149,6 +158,22 @@ extension APIProtocol {
         try await revokeDevice(Operations.RevokeDevice.Input(
             path: path,
             headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /v1/storage`.
+    /// - Remark: Generated from `#/paths//v1/storage/get(getStorageUsage)`.
+    public func getStorageUsage(headers: Operations.GetStorageUsage.Input.Headers = .init()) async throws -> Operations.GetStorageUsage.Output {
+        try await getStorageUsage(Operations.GetStorageUsage.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /v1/storage/purge-audio`.
+    /// - Remark: Generated from `#/paths//v1/storage/purge-audio/post(purgeAudio)`.
+    public func purgeAudio(
+        headers: Operations.PurgeAudio.Input.Headers = .init(),
+        body: Operations.PurgeAudio.Input.Body
+    ) async throws -> Operations.PurgeAudio.Output {
+        try await purgeAudio(Operations.PurgeAudio.Input(
+            headers: headers,
+            body: body
         ))
     }
     /// - Remark: HTTP `GET /v1/generations`.
@@ -256,6 +281,17 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /v1/generations/{id}/audio`.
+    /// - Remark: Generated from `#/paths//v1/generations/{id}/audio/delete(deleteGenerationAudio)`.
+    public func deleteGenerationAudio(
+        path: Operations.DeleteGenerationAudio.Input.Path,
+        headers: Operations.DeleteGenerationAudio.Input.Headers = .init()
+    ) async throws -> Operations.DeleteGenerationAudio.Output {
+        try await deleteGenerationAudio(Operations.DeleteGenerationAudio.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// A bounded NDJSON stream of complete GenerationRecord values, with the latest record repeated as a two-second heartbeat. Ends after a terminal record.

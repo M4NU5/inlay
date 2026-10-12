@@ -96,9 +96,13 @@ export async function syncDirectory(path: string) {
 export const sha256 = (data: Uint8Array | string) =>
   createHash("sha256").update(data).digest("hex");
 
-export async function requireDiskSpaceFor(dataDirectory: string, additionalBytes: number) {
+export async function freeBytes(dataDirectory: string) {
   const disk = await statfs(dataDirectory, { bigint: true });
-  if (disk.bavail * disk.bsize < 100n * 1024n * 1024n + BigInt(Math.ceil(additionalBytes)))
+  return disk.bavail * disk.bsize;
+}
+
+export async function requireDiskSpaceFor(dataDirectory: string, additionalBytes: number) {
+  if ((await freeBytes(dataDirectory)) < 100n * 1024n * 1024n + BigInt(Math.ceil(additionalBytes)))
     throw new ServiceError(
       507,
       "storage_full",

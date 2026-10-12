@@ -23,10 +23,11 @@ export type PersonalDictionary = Omit<Schemas["PersonalDictionary"], "lists"> & 
 };
 export type ServerPreferences = Omit<
   Schemas["ServerPreferences"],
-  "dictionary" | "proofreadingPrompt"
+  "dictionary" | "proofreadingPrompt" | "audioRetentionDays"
 > & {
   dictionary: PersonalDictionary;
   proofreadingPrompt: string;
+  audioRetentionDays: number;
 };
 export type PreferencesSnapshot = Omit<Schemas["PreferencesSnapshot"], "preferences"> & {
   preferences: ServerPreferences;
@@ -37,6 +38,9 @@ export type DeviceSummary = Schemas["DeviceSummary"];
 export type DeviceList = Schemas["DeviceList"];
 export type EnrollDeviceRequest = Schemas["EnrollDeviceRequest"];
 export type EnrollDeviceResponse = Schemas["EnrollDeviceResponse"];
+export type StorageUsage = Schemas["StorageUsage"];
+export type PurgeAudioRequest = Schemas["PurgeAudioRequest"];
+export type PurgeAudioResult = Schemas["PurgeAudioResult"];
 export type ModelRuntimeInfo = Schemas["ModelRuntimeInfo"];
 export type ServerHealth = Schemas["ServerHealth"];
 export type CreateGenerationRequest = Schemas["CreateGenerationRequest"];
