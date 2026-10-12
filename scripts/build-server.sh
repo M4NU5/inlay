@@ -76,6 +76,13 @@ test -x "$text_helper"
 test -f "$vad_model"
 bun install --frozen-lockfile
 
+if [[ -z "${INLAY_SERVER_VERSION:-}" ]]; then
+    described=$(git describe --tags --match 'server-v*' --always 2>/dev/null || true)
+    INLAY_SERVER_VERSION="${described#server-v}"
+    [[ -n "$INLAY_SERVER_VERSION" ]] || INLAY_SERVER_VERSION="0.0.0-dev"
+fi
+export INLAY_SERVER_VERSION
+
 mkdir -p build
 staging_dir=$(mktemp -d "$project_dir/build/.server.XXXXXX")
 trap 'rm -rf "$staging_dir"' EXIT

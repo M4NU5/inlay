@@ -36,6 +36,12 @@ staged_app="$staging_dir/$app_name.app"
 mkdir -p "$staged_app/Contents/MacOS" "$staged_app/Contents/Resources"
 cp "$swift_bin/Inlay" "$staged_app/Contents/MacOS/Inlay"
 cp "$info_plist" "$staged_app/Contents/Info.plist"
+if [[ -n "${INLAY_CLIENT_VERSION:-}" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $INLAY_CLIENT_VERSION" "$staged_app/Contents/Info.plist"
+fi
+if [[ -n "${INLAY_CLIENT_BUILD:-}" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $INLAY_CLIENT_BUILD" "$staged_app/Contents/Info.plist"
+fi
 cp Resources/swift-openapi-runtime-LICENSE.txt Resources/swift-http-types-LICENSE.txt \
     THIRD_PARTY_NOTICES.md "$staged_app/Contents/Resources/"
 swift scripts/make-icon.swift "$project_dir/.build/Inlay.iconset"

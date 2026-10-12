@@ -31,6 +31,7 @@ import type { InferenceBackend } from "./inference/native-inference.ts";
 import { InferenceError } from "./inference/inference-error.ts";
 import { DeviceStore, timingSafeStringEqual, type RequestActor } from "./devices.ts";
 import { ServiceError } from "./errors.ts";
+import { SERVER_VERSION } from "./version.ts";
 import { logError, logInfo, logWarn } from "./log.ts";
 import {
   atomicPrivateWrite,
@@ -556,7 +557,7 @@ export class GenerationService {
     if (!state.speechLoaded) this.beginWarmup();
     return {
       apiVersion: API_VERSION,
-      serverVersion: "0.1.0",
+      serverVersion: SERVER_VERSION,
       isDev: this.configuration.development,
       ready,
       speech: {

@@ -298,6 +298,9 @@ struct ServerPreferencesPage: View {
                     Section {
                         runtimeRow("Voice", runtime: health.speech)
                         runtimeRow("Proofreading", runtime: health.proofreading)
+                    if let serverVersion = controller.serverHealth?.serverVersion {
+                        LabeledContent("Server version", value: serverVersion)
+                    }
                     } header: { Text("Server models").textCase(nil) }
                 }
                 Section {
