@@ -47,6 +47,9 @@ const artifactName = (value: string) => {
 type IDParams = { id: string };
 export function createHTTPServer(service: GenerationService) {
   const actors = new WeakMap<FastifyRequest, RequestActor>();
+  // Blunts online guessing of a human-chosen admin token; device tokens are
+  // 256-bit random. In-memory only: a restart resets the window.
+  const authFailures = new Map<string, { count: number; windowStartedAt: number }>();
   const deviceIDOf = (request: FastifyRequest) => {
     const actor = actors.get(request);
     if (actor?.kind !== "device")
@@ -72,16 +75,29 @@ export function createHTTPServer(service: GenerationService) {
   app.addHook("onRequest", async (request) => {
     const path = request.url.split("?")[0]!;
     if (path !== "/v1/liveness") {
+      const remote = request.socket.remoteAddress ?? "unknown";
+      const failures = authFailures.get(remote);
+      if (failures && Date.now() - failures.windowStartedAt < 300_000 && failures.count >= 10)
+        throw new ServiceError(
+          429,
+          "auth_throttled",
+          "Too many failed sign-in attempts. Try again shortly.",
+        );
       const header = request.headers.authorization ?? "";
       const actor = service.authenticate(
         header.startsWith("Bearer ") ? header.slice(7) : undefined,
       );
-      if (actor.kind === "none")
+      if (actor.kind === "none") {
+        if (!failures || Date.now() - failures.windowStartedAt >= 300_000)
+          authFailures.set(remote, { count: 1, windowStartedAt: Date.now() });
+        else failures.count++;
         throw new ServiceError(
           401,
           "unauthorized",
           "Connect with this device's server credential.",
         );
+      }
+      authFailures.delete(remote);
       actors.set(request, actor);
       if (actor.kind === "admin" && !path.startsWith("/v1/devices") && path !== "/v1/health")
         throw new ServiceError(

@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { mkdir, open, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { logWarn } from "./log.ts";
 import {
   createInferenceConfiguration,
   type InferenceConfiguration,
@@ -103,6 +104,11 @@ export async function parseConfiguration(
     );
     try {
       const stat = await file.stat();
+      if ((stat.mode & 0o077) !== 0)
+        logWarn("token_file_permissions", {
+          file: expandPath(tokenFile),
+          message: "Admin token file should have mode 0600.",
+        });
       if (!stat.isFile() || stat.size > 4096)
         throw new Error("The token file must contain at most 4096 bytes of UTF-8 text.");
       const bytes = await file.readFile();

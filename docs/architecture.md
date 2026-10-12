@@ -60,6 +60,8 @@ The server's `--data-dir` (normally `.local/server` in development) contains:
 
 ```text
 preferences.json
+devices.json
+admin-token (only when auto-created)
 generations/<UUID>/
   metadata.json
   transcript.txt
@@ -67,9 +69,9 @@ generations/<UUID>/
   original.wav
 ```
 
-Metadata includes device identity, settings snapshot, raw/final text, insertion/preview text, model and processing details, and any delivery receipt. `transcript.txt` contains the current take's final text. Inference audio is always retained for completed takes; original audio is optional and defaults on. The retention toggle does not remove existing files, and there is no automatic history expiry.
+Metadata includes device identity, settings snapshot, raw/final text, insertion/preview text, model and processing details, and any delivery receipt. `transcript.txt` contains the current take's final text. Text and metadata are kept forever. Recording audio auto-deletes after the shared `audioRetentionDays` cap (default 90 days; 0 keeps it forever) via a boot/daily sweep, and can be purged on demand from Server preferences; original audio is optional and defaults on for future takes. Cancelled and failed takes keep their audio under the same cap, labeled in History, until it expires or is deleted per record.
 
-All clients read shared, paginated history. Deleting an inactive generation deletes its server artifacts. Failed takes can retain metadata and sealed audio; partial upload files are internal and cannot be downloaded. Client audio copies are temporary.
+All clients read shared, paginated history. Deleting an inactive generation deletes its server artifacts. Failed and cancelled takes retain metadata and sealed audio (labeled, deletable per record); partial upload files are internal and cannot be downloaded. Client audio copies are temporary.
 
 Only one server may own a data directory. Back up preferences and generation directories together. Inlay does not add filesystem encryption; protect this directory as you would the recordings it contains. Authentication and remote transport are described in the [server guide](../Server/README.md#remote-access).
 
