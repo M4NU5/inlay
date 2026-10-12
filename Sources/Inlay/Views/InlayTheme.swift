@@ -446,7 +446,7 @@ struct InlineNotice: View {
                 .font(.system(size: 13))
                 .padding(.top, 1)
             Text(message)
-                .font(.system(size: 12))
+                .font(.caption)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
         }

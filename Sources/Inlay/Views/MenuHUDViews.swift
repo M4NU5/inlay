@@ -17,10 +17,12 @@ struct InlayMenuView: View {
                 Spacer(minLength: 8)
                 HStack(spacing: 6) {
                     StatusDot(isReady: controller.isServerReady)
-                    Text(controller.serverStatusMessage)
-                        .font(.caption)
-                        .foregroundStyle(InlayPalette.muted)
-                        .lineLimit(1)
+                    if !controller.isServerReady {
+                        Text(controller.serverStatusMessage)
+                            .font(.caption)
+                            .foregroundStyle(InlayPalette.muted)
+                            .lineLimit(1)
+                    }
                 }
                 .frame(width: 112, alignment: .trailing)
                 .help(controller.serverStatusMessage)
@@ -110,7 +112,7 @@ extension DictationDeliveryStatus {
 }
 
 struct DictationHUD: View {
-    static let width: CGFloat = InlayBuild.current.isDevelopment ? 200 : 160
+    static let width: CGFloat = 200 + (InlayBuild.current.isDevelopment ? 32 : 0)
     static let height: CGFloat = 44
     static let noticeHeight: CGFloat = 30
     static let morphDuration = 0.18
@@ -223,7 +225,7 @@ struct DictationHUD: View {
                     Text(stageText).lineLimit(1).minimumScaleFactor(0.8)
                 }
             }
-            .font(.system(size: 11, weight: .medium))
+            .font(.caption.weight(.medium))
             .foregroundStyle(InlayPalette.muted)
             Button { controller.cancelDictation() } label: {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
@@ -245,7 +247,7 @@ struct DictationHUD: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(InlayPalette.warning)
             Text(result.hudLabel)
-                .font(.system(size: 11, weight: .medium))
+                .font(.caption.weight(.medium))
                 .foregroundStyle(InlayPalette.muted)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -326,7 +328,7 @@ struct RecordingLimitNote: View {
 
     var body: some View {
         Text(notice?.text ?? "Recording limit in 0:30")
-            .font(.system(size: 11, weight: .medium))
+            .font(.caption.weight(.medium))
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.8)
