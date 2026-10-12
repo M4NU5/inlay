@@ -47,7 +47,9 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
     INLAY_DEV: "1",
   };
   const configuration = await parseConfiguration(arguments_, environment);
-  const displayHost = isLoopbackHost(configuration.host) ? "localhost" : configuration.host;
+  const displayHost =
+    process.env.INLAY_DEV_DISPLAY_HOST ??
+    (isLoopbackHost(configuration.host) ? "localhost" : configuration.host);
   console.log(`Development URL: http://${displayHost}:${configuration.port}/v1/liveness`);
   console.log(`Data: ${configuration.dataDirectory}\nToken file: ${tokenFile}`);
   console.log("Bun watches source changes. Missing helpers/models appear in health readiness.");
