@@ -371,7 +371,7 @@ export class GenerationService {
     if (this.stopping || this.timer) return;
     this.beginWarmup();
     this.timer = setInterval(() => {
-      void this.tick().catch(() => {});
+      void this.tick().catch((error) => logError("tick_failed", error));
     }, 2000);
     this.timer.unref();
   }
@@ -794,7 +794,8 @@ export class GenerationService {
         record.updatedAt = now();
         record.progress = 0;
         await this.save(record);
-      } catch {
+      } catch (error) {
+        logError("seal_failed", error, { id });
         // Keep the uploaded audio: a seal failure is retryable with the same
         // frame counts once space is freed. Drop only the partial WAVs, and
         // clear an artifact assignment only when its raw source still exists
@@ -1187,6 +1188,7 @@ export class GenerationService {
     return copy(previous.continuation);
   }
   private enqueueProcessing(id: string, previous: DictationContinuation | undefined) {
+    const enqueuedAt = performance.now();
     const controller = new AbortController();
     this.processingControllers.set(id, controller);
     // A sealed recording waits for all earlier processing and cancellation cleanup.
@@ -1195,9 +1197,9 @@ export class GenerationService {
       .then(async () => {
         // Helper loads join any in-flight warmup, so jobs never wait for proofreading to load.
         if (!this.stopping && !controller.signal.aborted)
-          await this.process(id, previous, controller.signal);
+          await this.process(id, previous, controller.signal, enqueuedAt);
       })
-      .catch(() => {})
+      .catch((error) => logError("processing_chain_failed", error, { id }))
       .finally(() => {
         this.processingControllers.delete(id);
         this.beginWarmup();
@@ -1207,7 +1209,11 @@ export class GenerationService {
     id: string,
     previous: DictationContinuation | undefined,
     signal: AbortSignal,
+    enqueuedAt = performance.now(),
   ) {
+    const startedAt = performance.now();
+    let transcribeMs = 0;
+    let proofMs = 0;
     try {
       let record = await this.mutate(async () => {
         const record = this.getInternal(id);
@@ -1219,6 +1225,7 @@ export class GenerationService {
       });
       if (!record) return;
       const settings = record.settings.preferences;
+      const transcribeStartedAt = performance.now();
       const speech = await this.inference.transcribe(
         join(this.directory(id), "inference.wav"),
         settings.language,
@@ -1229,6 +1236,7 @@ export class GenerationService {
         },
         signal,
       );
+      transcribeMs = Math.round(performance.now() - transcribeStartedAt);
       signal.throwIfAborted();
       record.rawText = speech.text;
       record.detectedLanguage = speech.language === "auto" ? undefined : speech.language;
@@ -1256,6 +1264,7 @@ export class GenerationService {
         });
         if (!updated) return;
       }
+      const proofStartedAt = performance.now();
       const processing = await this.proofread(
         structured.text,
         settings,
@@ -1263,6 +1272,7 @@ export class GenerationService {
         speech.language === "auto" ? settings.language : speech.language,
         signal,
       );
+      proofMs = Math.round(performance.now() - proofStartedAt);
       signal.throwIfAborted();
       record.textProcessing = processing;
       if (["applied", "unchanged", "rejected"].includes(processing.status)) {
@@ -1296,7 +1306,23 @@ export class GenerationService {
         await atomicPrivateWrite(join(this.directory(id), "transcript.txt"), record!.finalText);
         await this.save(record!);
       });
+      logInfo("generation_processed", {
+        id,
+        queueWaitMs: Math.round(startedAt - enqueuedAt),
+        transcribeMs,
+        proofMs,
+        totalMs: Math.round(performance.now() - startedAt),
+        status: "completed",
+      });
     } catch (error) {
+      if (!signal.aborted)
+        logError("generation_failed", error, {
+          id,
+          queueWaitMs: Math.round(startedAt - enqueuedAt),
+          transcribeMs,
+          proofMs,
+          totalMs: Math.round(performance.now() - startedAt),
+        });
       await this.mutate(async () => {
         const record = this.records.get(id);
         if (!record || terminal(record)) return;
