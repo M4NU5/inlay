@@ -33,6 +33,7 @@ import {
   ensureDirectory,
   readRegularFile,
   requireDiskSpace,
+  requireDiskSpaceFor,
   requireRegularDirectory,
 } from "./storage.ts";
 import { WisprFlowImports } from "./imports.ts";
@@ -687,20 +688,37 @@ export class GenerationService {
           "This recording does not retain original audio.",
         );
       const previous = this.continuation(request.continuationID, record);
+      await requireDiskSpaceFor(
+        this.configuration.dataDirectory,
+        speech.bytes + 44 + (original ? original.bytes + 44 : 0),
+      );
       try {
-        record.inferenceAudio = await this.seal(id, "inference", speech);
-        if (original) record.originalAudio = await this.seal(id, "original", original);
+        if (!record.inferenceAudio)
+          record.inferenceAudio = await this.seal(id, "inference", speech);
+        if (original && !record.originalAudio)
+          record.originalAudio = await this.seal(id, "original", original);
         record.status = "queued";
+        delete record.error;
         record.updatedAt = now();
         record.progress = 0;
         await this.save(record);
       } catch {
-        record.status = "failed";
+        // Keep the uploaded audio: a seal failure is retryable with the same
+        // frame counts once space is freed. Drop only the partial WAVs, and
+        // clear an artifact assignment only when its raw source still exists
+        // (a completed seal already removed the raw; keep that artifact).
+        for (const kind of ["inference", "original"] as const) {
+          const rawKept = await access(join(this.directory(id), `${kind}.raw`)).then(
+            () => true,
+            () => false,
+          );
+          if (rawKept) delete record[kind === "inference" ? "inferenceAudio" : "originalAudio"];
+        }
+        record.status = "receiving";
         record.error = "The server could not preserve the complete recording.";
         record.updatedAt = now();
         await this.save(record).catch(() => this.publish(record));
-        await this.cleanPartial(id);
-        this.beginWarmup();
+        await this.cleanSealPartials(id);
         throw new ServiceError(500, "audio_storage_failed", record.error);
       }
       this.uploads.delete(id);
@@ -1234,6 +1252,10 @@ export class GenerationService {
     if (!record || record.status !== "transcribing" || !Number.isFinite(value)) return;
     record.progress = Math.max(0, Math.min(1, value));
     for (const watcher of this.subscribers.get(id) ?? []) this.yieldTo(watcher, record);
+  }
+  private async cleanSealPartials(id: string) {
+    for (const name of ["inference.wav.partial", "original.wav.partial"])
+      await rm(join(this.directory(id), name), { force: true }).catch(() => {});
   }
   private async cleanPartial(id: string) {
     this.uploads.delete(id);

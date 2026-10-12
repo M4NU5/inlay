@@ -92,12 +92,16 @@ export async function atomicPrivateWrite(path: string, data: Uint8Array | string
 export const sha256 = (data: Uint8Array | string) =>
   createHash("sha256").update(data).digest("hex");
 
-export async function requireDiskSpace(dataDirectory: string) {
+export async function requireDiskSpaceFor(dataDirectory: string, additionalBytes: number) {
   const disk = await statfs(dataDirectory, { bigint: true });
-  if (disk.bavail * disk.bsize < 100n * 1024n * 1024n)
+  if (disk.bavail * disk.bsize < 100n * 1024n * 1024n + BigInt(Math.ceil(additionalBytes)))
     throw new ServiceError(
       507,
       "storage_full",
       "The server needs more free disk space before accepting audio.",
     );
+}
+
+export async function requireDiskSpace(dataDirectory: string) {
+  return requireDiskSpaceFor(dataDirectory, 0);
 }
