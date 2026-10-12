@@ -6,13 +6,15 @@ struct DevicePreferencesPage: View {
     @ObservedObject var controller: InlayController
 
     var body: some View {
-        DevicePreferencesForm(controller: controller, preferences: controller.preferences)
+        DevicePreferencesForm(controller: controller, preferences: controller.preferences,
+                              configuration: controller.configuration)
     }
 }
 
 private struct DevicePreferencesForm: View {
     @ObservedObject var controller: InlayController
     @ObservedObject var preferences: ClientPreferencesStore
+    @ObservedObject var configuration: ConfigurationStore
     @State private var endpoint = ""
     @State private var token = ""
     @State private var deviceName = ""
@@ -26,6 +28,11 @@ private struct DevicePreferencesForm: View {
                     .accessibilityIdentifier("preferences.endpoint")
                 SecureField("Access token", text: $token)
                     .accessibilityIdentifier("preferences.token")
+                Text(InlayBuild.current.isDevelopment
+                    ? "Dev server token: .local/dev-server/token (created by bun run dev)."
+                    : "Use the token from your server's token file (its --token-file path, or /etc/inlay/token on Linux).")
+                    .font(.caption)
+                    .foregroundStyle(InlayPalette.muted)
                 TextField("Device name", text: $deviceName)
                     .accessibilityIdentifier("preferences.device-name")
                 HStack {
@@ -78,6 +85,12 @@ private struct DevicePreferencesForm: View {
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
                     Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
+                }
+                if let error = configuration.errorMessage {
+                    HStack {
+                        Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
+                        Button("Reveal config file") { configuration.revealFile() }
+                    }
                 }
             } header: { Text("This Mac").textCase(nil) }
             .disabled(controller.isBusy)
@@ -168,9 +181,11 @@ struct ServerPreferencesPage: View {
             .padding(.bottom, 10)
 
             HStack {
-                InlayActionMessage(message: changedRemotely
-                    ? "Shared preferences changed on another device. Reload to continue."
-                    : (draft.validationError ?? controller.errorMessage))
+                InlayActionMessage(message: !available
+                    ? "Cannot load shared preferences while the server is unavailable."
+                    : changedRemotely
+                        ? "Shared preferences changed on another device. Reload to continue."
+                        : (draft.validationError ?? controller.errorMessage))
                 Button("Reload") { loadLatest() }
                     .opacity(changedRemotely ? 1 : 0)
                     .disabled(!changedRemotely)

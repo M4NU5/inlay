@@ -1,7 +1,7 @@
 import InlayCore
 import SwiftUI
 
-private enum InlayPage: String, CaseIterable, Identifiable {
+enum InlayPage: String, CaseIterable, Identifiable {
     case dictation = "Dictation"
     case history = "History"
     case microphone = "Microphone"
@@ -22,7 +22,12 @@ private enum InlayPage: String, CaseIterable, Identifiable {
 
 struct InlayWindowView: View {
     @ObservedObject var controller: InlayController
-    @State private var page: InlayPage = .dictation
+    @State private var page: InlayPage
+
+    init(controller: InlayController, initialPage: InlayPage = .dictation) {
+        self.controller = controller
+        _page = State(initialValue: initialPage)
+    }
 
     var body: some View {
         NavigationSplitView {

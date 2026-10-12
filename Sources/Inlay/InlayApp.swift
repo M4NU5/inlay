@@ -36,6 +36,7 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
     private var configuration: ConfigurationStore?
     private var startupTask: Task<Void, Never>?
     private var reopenRequested = false
+    private var initialPage: InlayPage = .dictation
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = ProcessInfo.processInfo.environment["INLAY_CLIENT_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -64,6 +65,7 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
         configureApplicationMenu()
         configureStatusItem()
         let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: "hasLaunched") { initialPage = .device }
         if reopenRequested || configuration.errorMessage != nil || !defaults.bool(forKey: "hasLaunched") || !controller.allPermissionsGranted {
             showWindow()
         }
@@ -117,7 +119,7 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
             window.backgroundColor = NSColor(InlayPalette.canvas)
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 820, height: 620)
-            window.contentViewController = NSHostingController(rootView: InlayWindowView(controller: controller))
+            window.contentViewController = NSHostingController(rootView: InlayWindowView(controller: controller, initialPage: initialPage))
             window.delegate = self
             if !window.setFrameUsingName(InlayBuild.current.windowAutosaveName) { window.center() }
             window.setFrameAutosaveName(InlayBuild.current.windowAutosaveName)
