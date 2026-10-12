@@ -236,6 +236,7 @@ export class GenerationService {
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
       await atomicPrivateWrite(path, JSON.stringify(this.preferences));
     }
+    const requeue: { id: string; createdAt: string }[] = [];
     for (const name of await readdir(join(data, "generations"))) {
       if (!isUUID(name)) continue;
       const id = name.toUpperCase();
@@ -273,11 +274,38 @@ export class GenerationService {
         throw new ServiceError(500, "invalid_archive", "A generation has invalid metadata.");
       record.id = id;
       if (!terminal(record)) {
-        record.status = "failed";
-        record.error = "Server restarted before this generation completed.";
-        record.updatedAt = now();
-        delete record.progress;
-        await this.cleanPartial(id);
+        let sealed = false;
+        if (record.status !== "receiving" && record.inferenceAudio) {
+          try {
+            const file = await open(
+              join(this.directory(id), "inference.wav"),
+              constants.O_RDONLY | constants.O_NOFOLLOW,
+            );
+            try {
+              sealed = (await file.stat()).isFile();
+            } finally {
+              await file.close();
+            }
+          } catch {
+            sealed = false;
+          }
+        }
+        if (sealed) {
+          record.status = "queued";
+          record.progress = 0;
+          delete record.error;
+          record.updatedAt = now();
+          requeue.push({ id, createdAt: record.createdAt });
+        } else {
+          const wasReceiving = record.status === "receiving";
+          record.status = "failed";
+          record.error = wasReceiving
+            ? "Server restarted before this generation completed."
+            : "Sealed audio is missing, so this generation cannot be transcribed.";
+          record.updatedAt = now();
+          delete record.progress;
+          await this.cleanPartial(id);
+        }
         if (Buffer.byteLength(JSON.stringify(record)) <= MAX_METADATA_BYTES)
           await atomicPrivateWrite(
             join(this.directory(id), "metadata.json"),
@@ -287,6 +315,8 @@ export class GenerationService {
       this.records.set(id, record);
       this.imports.indexRecord(record);
     }
+    requeue.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    for (const entry of requeue) this.enqueueProcessing(entry.id, undefined);
   }
   start() {
     if (this.stopping || this.timer) return;
@@ -320,14 +350,27 @@ export class GenerationService {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.warmController?.abort();
-    await this.mutate(async () => {
-      for (const record of this.records.values())
-        if (!terminal(record)) await this.cancelRecord(record.id);
-    });
+    for (const controller of this.processingControllers.values()) controller.abort();
     await this.inference.shutdown();
     await Promise.allSettled(
       [this.processingQueue, this.warmTask].filter((task): task is Promise<void> => Boolean(task)),
     );
+    // Sealed work survives shutdown as queued; only unsealed receiving
+    // sessions are cancelled. This runs after the queue drains so the
+    // queued state is the final write.
+    await this.mutate(async () => {
+      for (const record of [...this.records.values()]) {
+        if (record.status === "receiving") await this.cancelRecord(record.id);
+        else if (!terminal(record) && record.inferenceAudio) {
+          const queued = copy(record);
+          queued.status = "queued";
+          delete queued.progress;
+          delete queued.error;
+          queued.updatedAt = now();
+          await this.save(queued).catch(() => this.publish(queued));
+        }
+      }
+    });
     await this.mutate(() => {
       for (const watchers of this.subscribers.values())
         for (const watcher of watchers) {
@@ -1148,6 +1191,14 @@ export class GenerationService {
         const record = this.records.get(id);
         if (!record || terminal(record)) return;
         const failed = copy(record);
+        if (this.stopping && failed.inferenceAudio) {
+          failed.status = "queued";
+          delete failed.error;
+          delete failed.progress;
+          failed.updatedAt = now();
+          await this.save(failed).catch(() => this.publish(failed));
+          return;
+        }
         failed.status = signal.aborted ? "cancelled" : "failed";
         failed.error = signal.aborted
           ? "Recording cancelled."
