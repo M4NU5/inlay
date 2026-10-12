@@ -162,7 +162,8 @@ final class InlayController: ObservableObject {
     var recordingUsesClipboard: Bool { isCapturing && insertionDestination == .clipboard }
     var isBusy: Bool { activity.isBusy || !pendingDictations.isEmpty }
     var pendingDictationCount: Int { pendingDictations.count }
-    var canCancelWithEscape: Bool { !hotkey.isHoldingFn }
+    var canCancelWithEscape: Bool { isCapturing && !hotkey.isHoldingFn }
+    var triggerKeyTitle: String { shortcut.title }
     var isServerReady: Bool { serverHealth?.ready == true && serverHealth?.apiVersion == InlayAPI.version }
     var canTest: Bool { isServerReady && permissions.microphone && microphones.resolution.device != nil && !isCapturing }
     var selectedInputName: String { microphones.resolution.device?.name ?? "No microphone available" }
@@ -1029,8 +1030,8 @@ final class InlayController: ObservableObject {
         hotkey.onCancel = { [weak self] in
             guard let self else { return }
             if isCheckingShortcut { appendShortcutCheck("Hold cancelled; microphone stayed off.") }
-            else if isBusy { cancelDictation() }
-            else { dismissFeedback() }
+            else if canCancelWithEscape { cancelDictation() }
+            else if !isBusy { dismissFeedback() }
         }
     }
 

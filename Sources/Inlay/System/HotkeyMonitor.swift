@@ -83,6 +83,7 @@ enum HoldKey: String, CaseIterable, Identifiable {
 enum HotkeyActivationMode: String, CaseIterable, Identifiable {
     case hold
     case doubleTapToggle = "doubleTap"
+    case tapToggle = "tapToggle"
 
     var id: String { rawValue }
 
@@ -90,6 +91,17 @@ enum HotkeyActivationMode: String, CaseIterable, Identifiable {
         switch self {
         case .hold: "Hold to talk"
         case .doubleTapToggle: "Double tap to toggle"
+        case .tapToggle: "Tap to start and stop"
+        }
+    }
+
+    var isLatched: Bool { self != .hold }
+
+    var actionVerb: String {
+        switch self {
+        case .hold: "hold"
+        case .doubleTapToggle: "double tap"
+        case .tapToggle: "tap"
         }
     }
 }
@@ -320,8 +332,8 @@ final class HotkeyMonitor {
             return
         }
         if type == .keyDown, code == 53 {
-            // The controller decides whether anything is cancellable, including
-            // transcription after the hold key has already been released.
+            // The controller honors this only while capturing; Escape during
+            // processing belongs to the focused app.
             // Escape is a single cancel: it clears a hold or a double-tap latch
             // without also reporting that hold's own cancel. A latch-only
             // cancel must not arm the chord block, or the next tap is swallowed.
@@ -374,9 +386,8 @@ final class HotkeyMonitor {
             blockCurrentHold()
             return
         }
-        if mode == .doubleTapToggle {
-            // A tap's meaning is decided when it ends: two taps inside the
-            // window toggle recording, so no hold debounce applies.
+        if mode.isLatched {
+            // A tap's meaning is decided when it ends, so no hold debounce applies.
             return
         }
         if key == .fn {
@@ -465,15 +476,31 @@ final class HotkeyMonitor {
         awaitingObservedRelease = false
         watchdog?.cancel()
         watchdog = nil
-        if mode == .doubleTapToggle {
+        if mode.isLatched {
             guard wantsMonitoring, wasDown, !wasBlocked else { return }
-            registerToggleTap()
+            if mode == .tapToggle { registerLatchTap() } else { registerToggleTap() }
             return
         }
         if active {
             active = false
             onRelease?()
         }
+    }
+
+    private func registerLatchTap() {
+        if active {
+            active = false
+            onDiagnostic?("Tap ended the recording.")
+            onRelease?()
+            return
+        }
+        guard ensureListeningAccess() else { return }
+        guard onPress?() ?? true else {
+            onDiagnostic?("Tap ignored: recording did not start.")
+            return
+        }
+        active = true
+        onDiagnostic?("Tap accepted; recording stays on after release.")
     }
 
     private func registerToggleTap() {
@@ -502,7 +529,7 @@ final class HotkeyMonitor {
     /// A take that failed or was cancelled after starting must not leave a
     /// double-tap latch behind; the next double tap should start a new take.
     func clearLatchedTake() {
-        guard mode == .doubleTapToggle, active else { return }
+        guard mode.isLatched, active else { return }
         active = false
     }
 
@@ -622,7 +649,7 @@ final class HotkeyMonitor {
         pendingPress = nil
         pendingPressID = nil
         let wasActive = active
-        let latched = keepLatch && mode == .doubleTapToggle && active
+        let latched = keepLatch && mode.isLatched && active
         active = latched
         physicalDown = false
         blockedUntilRelease = false
