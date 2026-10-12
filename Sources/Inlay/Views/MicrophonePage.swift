@@ -347,6 +347,14 @@ private struct MicrophoneSettingsView: View {
             Button("Remove from priority list") { store.removeFromPriority(uid: device.uid) }
         }
         .accessibilityIdentifier("microphone.priority.\(device.uid)")
+        .focusable()
+        .onMoveCommand { direction in
+            switch direction {
+            case .up: if position > 0 { store.movePriority(uid: device.uid, by: -1) }
+            case .down: if position < count - 1 { store.movePriority(uid: device.uid, by: 1) }
+            default: break
+            }
+        }
     }
 
     private func priorityRowContent(_ device: AudioInputDevice, position: Int,

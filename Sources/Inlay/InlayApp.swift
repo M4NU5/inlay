@@ -202,11 +202,15 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
 
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "Edit")
-        for (title, action, key) in [
-            ("Undo", "undo:", "z"), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
-            ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a"),
+        for (title, action, key, modifiers) in [
+            ("Undo", "undo:", "z", NSEvent.ModifierFlags.command),
+            ("Redo", "redo:", "Z", NSEvent.ModifierFlags([.command, .shift])),
+            ("Cut", "cut:", "x", .command), ("Copy", "copy:", "c", .command),
+            ("Paste", "paste:", "v", .command), ("Select All", "selectAll:", "a", .command),
         ] {
-            edit.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: key))
+            let item = NSMenuItem(title: title, action: Selector(action), keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            edit.addItem(item)
         }
         editItem.submenu = edit
         main.addItem(editItem)

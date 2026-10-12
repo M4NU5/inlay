@@ -41,10 +41,11 @@ struct InlayWindowView: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 22)
 
-                List(InlayPage.allCases) { destination in
+                List(Array(InlayPage.allCases.enumerated()), id: \.element) { entry in
+                    let destination = entry.element
                     Button { page = destination } label: {
                         Label(destination.rawValue, systemImage: destination.symbol)
-                            .font(.system(size: 13, weight: page == destination ? .medium : .regular))
+                            .font(.callout.weight(page == destination ? .medium : .regular))
                             .foregroundStyle(page == destination ? InlayPalette.ink : InlayPalette.muted)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 10)
@@ -59,6 +60,7 @@ struct InlayWindowView: View {
                     .listRowBackground(Color.clear)
                     .accessibilityIdentifier("navigation.\(destination.id)")
                     .accessibilityAddTraits(page == destination ? .isSelected : [])
+                    .keyboardShortcut(KeyEquivalent(Character(String(entry.offset + 1))), modifiers: .command)
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
@@ -96,7 +98,7 @@ struct DevBadge: View {
     var body: some View {
         if InlayBuild.current.isDevelopment {
             Text("Dev")
-                .font(.system(size: 10, weight: .semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(InlayPalette.accentInk)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
