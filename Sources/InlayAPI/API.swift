@@ -336,6 +336,7 @@ public struct GenerationRecord: Codable, Equatable, Sendable, Identifiable {
     public var settings: PreferencesSnapshot
     public var inferenceAudio: AudioArtifact?
     public var originalAudio: AudioArtifact?
+    public var originalAudioOmittedReason: String?
     public var rawText: String
     public var finalText: String
     public var insertionText: String

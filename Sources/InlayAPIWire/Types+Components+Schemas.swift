@@ -1900,6 +1900,8 @@ extension Components {
             public var inferenceAudio: Components.Schemas.AudioArtifact?
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/originalAudio`.
             public var originalAudio: Components.Schemas.AudioArtifact?
+            /// - Remark: Generated from `#/components/schemas/GenerationRecord/originalAudioOmittedReason`.
+            public var originalAudioOmittedReason: Swift.String?
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/rawText`.
             public var rawText: Swift.String
             /// - Remark: Generated from `#/components/schemas/GenerationRecord/finalText`.
@@ -1950,6 +1952,7 @@ extension Components {
             ///   - settings:
             ///   - inferenceAudio:
             ///   - originalAudio:
+            ///   - originalAudioOmittedReason:
             ///   - rawText:
             ///   - finalText:
             ///   - insertionText:
@@ -1980,6 +1983,7 @@ extension Components {
                 settings: Components.Schemas.PreferencesSnapshot,
                 inferenceAudio: Components.Schemas.AudioArtifact? = nil,
                 originalAudio: Components.Schemas.AudioArtifact? = nil,
+                originalAudioOmittedReason: Swift.String? = nil,
                 rawText: Swift.String,
                 finalText: Swift.String,
                 insertionText: Swift.String,
@@ -2010,6 +2014,7 @@ extension Components {
                 self.settings = settings
                 self.inferenceAudio = inferenceAudio
                 self.originalAudio = originalAudio
+                self.originalAudioOmittedReason = originalAudioOmittedReason
                 self.rawText = rawText
                 self.finalText = finalText
                 self.insertionText = insertionText
@@ -2041,6 +2046,7 @@ extension Components {
                 case settings
                 case inferenceAudio
                 case originalAudio
+                case originalAudioOmittedReason
                 case rawText
                 case finalText
                 case insertionText
@@ -2105,6 +2111,10 @@ extension Components {
                 self.originalAudio = try container.decodeIfPresent(
                     Components.Schemas.AudioArtifact.self,
                     forKey: .originalAudio
+                )
+                self.originalAudioOmittedReason = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .originalAudioOmittedReason
                 )
                 self.rawText = try container.decode(
                     Swift.String.self,
@@ -2190,6 +2200,7 @@ extension Components {
                     "settings",
                     "inferenceAudio",
                     "originalAudio",
+                    "originalAudioOmittedReason",
                     "rawText",
                     "finalText",
                     "insertionText",

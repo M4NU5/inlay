@@ -547,6 +547,7 @@ export interface components {
       settings: components["schemas"]["PreferencesSnapshot"];
       inferenceAudio?: components["schemas"]["AudioArtifact"];
       originalAudio?: components["schemas"]["AudioArtifact"];
+      originalAudioOmittedReason?: string;
       rawText: string;
       finalText: string;
       insertionText: string;

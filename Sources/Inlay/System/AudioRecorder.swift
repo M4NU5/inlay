@@ -318,6 +318,16 @@ private final class QueuedAudioHardware: AudioCaptureHardware, @unchecked Sendab
 
 /// Only the admission gate is shared between the audio callback and the caller.
 /// Converter, file, counters, and errors are confined to the serial writer queue.
+/// Whether a negotiated input format's original copy can be archived.
+/// Mirrors the server caps (192 kHz format ceiling, 256 MiB per stream over
+/// the 180 s limit) in Server/src/generation-service.ts appendAudio.
+enum OriginalAudioPolicy {
+    static func isArchivable(sampleRate: Double, channels: Int) -> Bool {
+        sampleRate > 0 && sampleRate <= 192_000
+            && sampleRate * Double(channels) * 4 * 180 <= 268_435_456
+    }
+}
+
 final class RecordingWriter: @unchecked Sendable {
     private let queue = DispatchQueue(label: "local.inlay.audio-writer", qos: .userInitiated)
     private let admissionLock = NSLock()
@@ -377,7 +387,10 @@ final class RecordingWriter: @unchecked Sendable {
 
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("Inlay-Dev-recording-\(UUID().uuidString)", isDirectory: true)
         url = directory.appendingPathComponent("microphone.wav")
-        originalURL = preserveOriginalAudio ? directory.appendingPathComponent("original.wav") : nil
+        originalURL = preserveOriginalAudio
+            && OriginalAudioPolicy.isArchivable(sampleRate: inputFormat.sampleRate,
+                                                channels: Int(inputFormat.channelCount))
+            ? directory.appendingPathComponent("original.wav") : nil
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         do {
             try queue.sync {

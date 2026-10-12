@@ -826,23 +826,39 @@ export class GenerationService {
           "Recordings must be between 0.25 and 180 seconds.",
         );
       const original = streams?.original;
+      let sealOriginal = original;
       if (record.settings.preferences.keepOriginalAudio) {
-        if (!original || original.bytes / (original.format.channels * 4) !== request.originalFrames)
-          throw new ServiceError(
-            409,
-            "incomplete_original",
-            "Original audio has not been completely uploaded.",
-          );
-        if (
-          Math.abs(
-            original.bytes / (original.format.sampleRate * original.format.channels * 4) - duration,
-          ) > 0.075
-        )
-          throw new ServiceError(
-            400,
-            "audio_mismatch",
-            "Original and inference audio must cover the same recording interval.",
-          );
+        if (request.originalFrames === undefined) {
+          // Deliberate omission (format too large to archive): seal inference only.
+          if (original) {
+            await rm(join(this.directory(id), "original.raw"), { force: true }).catch(() => {});
+            if (streams) delete streams.original;
+            sealOriginal = undefined;
+          }
+          record.originalAudioOmittedReason =
+            "Original audio was not kept for this recording because its format is too large to archive.";
+        } else {
+          if (
+            !original ||
+            original.bytes / (original.format.channels * 4) !== request.originalFrames
+          )
+            throw new ServiceError(
+              409,
+              "incomplete_original",
+              "Original audio has not been completely uploaded.",
+            );
+          if (
+            Math.abs(
+              original.bytes / (original.format.sampleRate * original.format.channels * 4) -
+                duration,
+            ) > 0.075
+          )
+            throw new ServiceError(
+              400,
+              "audio_mismatch",
+              "Original and inference audio must cover the same recording interval.",
+            );
+        }
       } else if (request.originalFrames !== undefined || original)
         throw new ServiceError(
           400,
@@ -852,13 +868,13 @@ export class GenerationService {
       const previous = this.continuation(request.continuationID, record);
       await requireDiskSpaceFor(
         this.configuration.dataDirectory,
-        speech.bytes + 44 + (original ? original.bytes + 44 : 0),
+        speech.bytes + 44 + (sealOriginal ? sealOriginal.bytes + 44 : 0),
       );
       try {
         if (!record.inferenceAudio)
           record.inferenceAudio = await this.seal(id, "inference", speech);
-        if (original && !record.originalAudio)
-          record.originalAudio = await this.seal(id, "original", original);
+        if (sealOriginal && !record.originalAudio)
+          record.originalAudio = await this.seal(id, "original", sealOriginal);
         record.status = "queued";
         delete record.error;
         record.updatedAt = now();

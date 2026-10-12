@@ -366,11 +366,21 @@ extension ServerClient {
                 preserveOriginal: Bool) async throws -> UploadOutcome {
         var inference = UploadBuffer(kind: .inference)
         var original = UploadBuffer(kind: .original)
+        var keepOriginal = preserveOriginal
         func outcome(complete: Bool) -> UploadOutcome {
-            UploadOutcome(finish: FinishGenerationRequest(
+            let originalFrames = complete ? original.frames : original.acknowledgedFrames
+            return UploadOutcome(finish: FinishGenerationRequest(
                 inferenceFrames: complete ? inference.frames : inference.acknowledgedFrames,
-                originalFrames: preserveOriginal ? (complete ? original.frames : original.acknowledgedFrames) : nil),
+                originalFrames: keepOriginal && originalFrames > 0 ? originalFrames : nil),
                 complete: complete)
+        }
+        func flushOriginal() async throws {
+            guard keepOriginal else { return }
+            if try await flush(&original, to: id) == false {
+                // Archival copy failed; never lose the inference take over it.
+                keepOriginal = false
+                original = UploadBuffer(kind: .original)
+            }
         }
         for try await chunk in stream {
             try Task.checkCancellation()
@@ -378,20 +388,22 @@ extension ServerClient {
             case .normalized: try inference.append(chunk)
             case .original:
                 guard preserveOriginal else { throw ServerClientError.invalidResponse }
-                try original.append(chunk)
+                if keepOriginal,
+                   !OriginalAudioPolicy.isArchivable(sampleRate: chunk.sampleRate, channels: chunk.channels) {
+                    keepOriginal = false
+                }
+                if keepOriginal { try original.append(chunk) }
             }
             // Batch about half a second of samples, overlapping transfer with the
             // microphone while keeping HTTP overhead and memory bounded.
             if inference.data.count >= 32_000 {
                 guard try await flush(&inference, to: id) else { return outcome(complete: false) }
-                guard try await flush(&original, to: id) else { return outcome(complete: false) }
+                try await flushOriginal()
             }
-            if original.data.count >= 768_000 {
-                guard try await flush(&original, to: id) else { return outcome(complete: false) }
-            }
+            if original.data.count >= 768_000 { try await flushOriginal() }
         }
         guard try await flush(&inference, to: id) else { return outcome(complete: false) }
-        guard try await flush(&original, to: id) else { return outcome(complete: false) }
+        try await flushOriginal()
         return outcome(complete: true)
     }
 

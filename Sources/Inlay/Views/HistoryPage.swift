@@ -242,6 +242,9 @@ struct HistoryPage: View {
                             controller.openGenerationAudio(selected, kind: .original)
                         }
                     }
+                    if selected.originalAudio == nil, let reason = selected.originalAudioOmittedReason {
+                        Text(reason).font(.caption).foregroundStyle(InlayPalette.muted).lineLimit(1)
+                    }
                     if let source = selected.importedSource {
                         if source.artifactNames.contains(.sourceWAV) {
                             Button("Open Wispr Flow audio") {
