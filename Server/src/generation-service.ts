@@ -376,11 +376,12 @@ export class GenerationService {
     this.timer.unref();
   }
   private async tick() {
+    // Synchronous heartbeat: do not add an await to this loop without re-queueing it.
+    for (const [id, watchers] of this.subscribers) {
+      const record = this.records.get(id);
+      if (record) for (const watcher of watchers) this.yieldTo(watcher, record);
+    }
     await this.mutate(async () => {
-      for (const [id, watchers] of this.subscribers) {
-        const record = this.records.get(id);
-        if (record) for (const watcher of watchers) this.yieldTo(watcher, record);
-      }
       await this.imports.expireImportStages();
     });
     await this.mutate(async () => {
@@ -438,46 +439,46 @@ export class GenerationService {
     } catch {
       writable = false;
     }
-    return this.mutate(() => {
-      const failure = this.speechLoadFailure(state);
-      const ready = state.available && writable && !this.stopping && !failure;
-      const message = !writable
-        ? "Server storage is unavailable or full."
-        : this.stopping
-          ? "The server is shutting down."
-          : ready
-            ? state.speechLoaded
-              ? "Server ready."
-              : "Loading server models; recordings will queue."
-            : (failure ??
-              (this.warming ? "Loading server models…" : "Server models are unavailable."));
-      if (!state.speechLoaded) this.beginWarmup();
-      return {
-        apiVersion: API_VERSION,
-        serverVersion: "0.1.0",
-        isDev: this.configuration.development,
-        ready,
-        speech: {
-          modelID: "parakeet-tdt-0.6b-v3",
-          backend: this.speechBackend,
-          ready: state.speechLoaded,
-        },
-        proofreading: {
-          modelID: "Qwen3-4B-Instruct-2507",
-          backend: this.proofBackend,
-          ready: state.proofLoaded,
-          message: this.preferences.preferences.textCorrectionEnabled
-            ? state.proofLoaded
-              ? undefined
-              : (this.proofLoadError ?? "Unavailable; deterministic text is preserved.")
-            : "Disabled",
-        },
-        message,
-      };
-    });
+    // Synchronous read-copy from here: do not add an await without re-queueing.
+    const failure = this.speechLoadFailure(state);
+    const ready = state.available && writable && !this.stopping && !failure;
+    const message = !writable
+      ? "Server storage is unavailable or full."
+      : this.stopping
+        ? "The server is shutting down."
+        : ready
+          ? state.speechLoaded
+            ? "Server ready."
+            : "Loading server models; recordings will queue."
+          : (failure ??
+            (this.warming ? "Loading server models…" : "Server models are unavailable."));
+    if (!state.speechLoaded) this.beginWarmup();
+    return {
+      apiVersion: API_VERSION,
+      serverVersion: "0.1.0",
+      isDev: this.configuration.development,
+      ready,
+      speech: {
+        modelID: "parakeet-tdt-0.6b-v3",
+        backend: this.speechBackend,
+        ready: state.speechLoaded,
+      },
+      proofreading: {
+        modelID: "Qwen3-4B-Instruct-2507",
+        backend: this.proofBackend,
+        ready: state.proofLoaded,
+        message: this.preferences.preferences.textCorrectionEnabled
+          ? state.proofLoaded
+            ? undefined
+            : (this.proofLoadError ?? "Unavailable; deterministic text is preserved.")
+          : "Disabled",
+      },
+      message,
+    };
   }
-  getPreferences() {
-    return this.mutate(() => copy(this.preferences));
+  async getPreferences() {
+    // Synchronous read-copy: do not add an await without re-queueing.
+    return copy(this.preferences);
   }
   updatePreferences(update: components["schemas"]["PreferencesSnapshot"]) {
     return this.mutate(async () => {
@@ -819,45 +820,41 @@ export class GenerationService {
       return copy(record);
     });
   }
-  get(id: string) {
-    return this.mutate(() => this.getInternal(id));
+  async get(id: string) {
+    // Synchronous read-copy: do not add an await without re-queueing.
+    return this.getInternal(id);
   }
-  history(limit = 50, before?: string, source?: string): Promise<GenerationPage> {
-    return this.mutate(() => {
-      if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+  async history(limit = 50, before?: string, source?: string): Promise<GenerationPage> {
+    // Synchronous read-copy: do not add an await without re-queueing.
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+      throw new ServiceError(400, "invalid_limit", "History page size must be between 1 and 100.");
+    if (source !== undefined && source !== "wispr-flow" && source !== "inlay")
+      throw new ServiceError(400, "invalid_source", "Choose Wispr Flow or Inlay history.");
+    const sorted = [...this.records.values()]
+      .filter((record) =>
+        !source || source === "wispr-flow"
+          ? !source || record.importedSource?.provider === "wispr-flow"
+          : !record.importedSource,
+      )
+      .sort(
+        (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id),
+      );
+    let start = 0;
+    if (before) {
+      const index = sorted.findIndex((record) => record.id === before.toUpperCase());
+      if (index < 0)
         throw new ServiceError(
           400,
-          "invalid_limit",
-          "History page size must be between 1 and 100.",
+          "invalid_cursor",
+          "The history cursor is no longer valid. Reload history.",
         );
-      if (source !== undefined && source !== "wispr-flow" && source !== "inlay")
-        throw new ServiceError(400, "invalid_source", "Choose Wispr Flow or Inlay history.");
-      const sorted = [...this.records.values()]
-        .filter((record) =>
-          !source || source === "wispr-flow"
-            ? !source || record.importedSource?.provider === "wispr-flow"
-            : !record.importedSource,
-        )
-        .sort(
-          (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id),
-        );
-      let start = 0;
-      if (before) {
-        const index = sorted.findIndex((record) => record.id === before.toUpperCase());
-        if (index < 0)
-          throw new ServiceError(
-            400,
-            "invalid_cursor",
-            "The history cursor is no longer valid. Reload history.",
-          );
-        start = index + 1;
-      }
-      const items = sorted.slice(start, start + limit);
-      return {
-        items: copy(items),
-        nextCursor: start + items.length < sorted.length ? items.at(-1)?.id : undefined,
-      };
-    });
+      start = index + 1;
+    }
+    const items = sorted.slice(start, start + limit);
+    return {
+      items: copy(items),
+      nextCursor: start + items.length < sorted.length ? items.at(-1)?.id : undefined,
+    };
   }
   async events(id: string): Promise<AsyncIterable<GenerationRecord>> {
     const watcher = await this.mutate(() => {
