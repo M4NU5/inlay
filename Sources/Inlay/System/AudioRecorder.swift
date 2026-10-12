@@ -189,7 +189,8 @@ final class AudioRecorder {
 
     private func interrupt(id: UUID, message: String) {
         guard request?.id == id else { return }
-        cancel()
+        // Do not cancel here: the controller salvages the take through the
+        // normal stop path so already-streamed audio can still be sealed.
         onInterruption?(message)
     }
 

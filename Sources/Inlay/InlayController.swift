@@ -190,15 +190,16 @@ final class InlayController: ObservableObject {
         let upload: Task<UploadOutcome, Error>
         let pipe: AudioChunkPipe
         let destination: InsertionDestinationCapture?
+        let salvaged: Bool
         var task: Task<Void, Never>?
         var sealed = false
         /// Nil until the destination resolves; list continuation keys off its anchor.
         var target: (destination: InsertionDestination, anchor: DictationDestination?)?
 
         init(session: UUID, id: UUID, client: ServerClient, upload: Task<UploadOutcome, Error>,
-             pipe: AudioChunkPipe, destination: InsertionDestinationCapture?) {
+             pipe: AudioChunkPipe, destination: InsertionDestinationCapture?, salvaged: Bool = false) {
             self.session = session; self.id = id; self.client = client; self.upload = upload
-            self.pipe = pipe; self.destination = destination
+            self.pipe = pipe; self.destination = destination; self.salvaged = salvaged
         }
 
         func cancel() {
@@ -818,7 +819,7 @@ final class InlayController: ObservableObject {
     private func bindServices() {
         audioDevices.onChange = { [weak self] devices, defaultUID in self?.microphones.update(devices: devices, systemDefaultUID: defaultUID) }
         recorder.onLevel = { [weak self] level in guard let self, isCapturing else { return }; recordingFeedback.append(level) }
-        recorder.onInterruption = { [weak self] message in self?.failSession(message, cancelServer: true) }
+        recorder.onInterruption = { [weak self] message in self?.salvageDictation(reason: message) }
         hotkey.onStatusChange = { [weak self] in self?.isHotkeyActive = $0 }
         hotkey.onPress = { [weak self] in
             guard let self else { return false }
@@ -902,7 +903,13 @@ final class InlayController: ObservableObject {
                 uploadPipe = pipe
                 recorder.onChunk = { pipe.append($0) }
                 uploadTask = Task { [weak self] in
-                    do { return try await connection.upload(pipe.stream, to: created.id, preserveOriginal: created.settings.preferences.keepOriginalAudio) }
+                    do {
+                        let outcome = try await connection.upload(pipe.stream, to: created.id, preserveOriginal: created.settings.preferences.keepOriginalAudio)
+                        if let self, !outcome.complete, sessionID == current, isCapturing, !Task.isCancelled {
+                            salvageDictation(reason: "The connection was interrupted.")
+                        }
+                        return outcome
+                    }
                     catch {
                         if let self, sessionID == current, isCapturing, !Task.isCancelled {
                             failSession(Self.connectionMessage(error), cancelServer: true)
@@ -934,7 +941,17 @@ final class InlayController: ObservableObject {
         return true
     }
 
-    private func finishDictation(atLimit: Bool = false) {
+    /// Interruption path: seal whatever the server already acknowledged and
+    /// deliver to the clipboard only. The captured insertion target cannot be
+    /// trusted after sleep, lock, or device loss, so this never auto-inserts.
+    private func salvageDictation(reason: String) {
+        guard isCapturing else { return }
+        guard activity == .recording else { cancelDictation(); return }
+        statusMessage = "Saving interrupted recording…"
+        finishDictation(salvaged: true)
+    }
+
+    private func finishDictation(atLimit: Bool = false, salvaged: Bool = false) {
         guard isCapturing else { return }
         // A take ended by the duration limit must not leave a double-tap
         // latch behind, matching the failure and cancel paths.
@@ -957,9 +974,9 @@ final class InlayController: ObservableObject {
         let capturedDestination = insertionDestination
         let clipboardCount = recordingClipboardChangeCount
         let pending = PendingDictation(session: current, id: id, client: connection, upload: uploadTask,
-                                       pipe: uploadPipe, destination: destinationTask)
+                                       pipe: uploadPipe, destination: destinationTask, salvaged: salvaged)
         // Usually known at release, so a later take can continue a list in another field.
-        let knownDestination: InsertionDestination? = test ? .clipboard : capturedDestination
+        let knownDestination: InsertionDestination? = test || salvaged ? .clipboard : capturedDestination
         pending.target = knownDestination.map { Self.resolve($0, isTest: test, releasedAt: releasedAt) }
         pendingDictations.append(pending)
         activeGenerationID = nil; activeClient = nil; self.uploadTask = nil; self.uploadPipe = nil
@@ -980,13 +997,23 @@ final class InlayController: ObservableObject {
                 }
             }
             do {
-                let audio = try await stopped.value
-                capturedAudio = audio
+                let stoppedAudio: CapturedAudio?
+                do { stoppedAudio = try await stopped.value }
+                catch {
+                    // A salvaged take lives in the streamed, server-acknowledged
+                    // audio; a dead local capture must not discard it.
+                    if salvaged { stoppedAudio = nil } else { throw error }
+                }
+                capturedAudio = stoppedAudio
                 try Task.checkCancellation()
                 pending.pipe.finish()
-                var finish = try await pending.upload.value.finish
+                let uploadOutcome = try await pending.upload.value
+                var finish = uploadOutcome.finish
+                if !uploadOutcome.complete, finish.inferenceFrames < 4_000 {
+                    throw ServerClientError.rejected(422, "The interrupted recording was too short to save.")
+                }
                 try Task.checkCancellation()
-                audio.cleanup()
+                stoppedAudio?.cleanup()
                 capturedAudio = nil
                 let target: (destination: InsertionDestination, anchor: DictationDestination?)
                 if let known = pending.target { target = known }
@@ -1227,14 +1254,9 @@ final class InlayController: ObservableObject {
 
     private func restForSystem() {
         stopShortcutCheck()
-        let interrupted = isBusy
-        if isCapturing {
-            failSession("Recording interrupted while your Mac was away. Check shared history for completed results.", cancelServer: true)
-        }
-        stopPendingDictations()
-        if interrupted {
-            showError("Recording interrupted while your Mac was away. Check shared history for completed results.")
-        }
+        // Salvage a live take (best effort before suspend) and leave sealed
+        // pendings running: their recovery continues after wake.
+        if isCapturing { salvageDictation(reason: "Recording interrupted while your Mac was away.") }
         continuationAnchors.removeAll()
     }
     func refreshPermissions() {
