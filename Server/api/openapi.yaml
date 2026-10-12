@@ -14,6 +14,28 @@ x-inlay-maximumRecordingSeconds: 180
 x-inlay-maximumChunkBytes: 1048576
 x-inlay-maximumArtifactBytes: 8388608
 x-inlay-maximumDictionaryBytes: 8388608
+x-inlay-supportedLanguages:
+  [
+    "en",
+    "auto",
+    "es",
+    "fr",
+    "de",
+    "it",
+    "pt",
+    "nl",
+    "ja",
+    "zh",
+    "ko",
+    "hi",
+    "ar",
+    "pl",
+    "ru",
+    "uk",
+    "sv",
+  ]
+x-inlay-maximumMetadataBytes: 1048576
+x-inlay-maximumPreferencesBytes: 262144
 paths:
   "/v1/liveness":
     get:

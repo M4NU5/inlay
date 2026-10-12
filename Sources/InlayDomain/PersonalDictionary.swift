@@ -120,8 +120,6 @@ public struct PersonalDictionary: Codable, Equatable, Sendable {
         return nil
     }
 
-    /// Priority affects hints only. Preserve list order within each priority group;
-    /// aliases never become hints that could reinforce a wrong spelling.
 }
 
 private enum DictionaryValidation {

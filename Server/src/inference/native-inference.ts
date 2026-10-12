@@ -6,7 +6,11 @@ import type { ModelHintUsage } from "../api";
 import { HelperProcess, type HelperResponse } from "./helper-process";
 import { checkCancellation, InferenceError } from "./inference-error";
 import { ModelVerifier, type ModelPin } from "./model-verification";
-import { linuxProofModelPin, macProofManifestSHA256, speechModelPin } from "./model-pins";
+import {
+  linuxProofModelPin,
+  macProofManifestSHA256,
+  speechModelPin,
+} from "../generated/model-pins.ts";
 
 export { InferenceError } from "./inference-error";
 

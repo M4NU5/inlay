@@ -1637,7 +1637,7 @@ final class InlayController: ObservableObject {
                 guard let self, self.isCapturing else { return }
                 let elapsed = ProcessInfo.processInfo.systemUptime - self.recordingStart
                 self.recordingFeedback.updateElapsed(elapsed)
-                if elapsed >= LifecyclePolicy.maximumRecordingSeconds { self.finishDictation(atLimit: true) }
+                if elapsed >= Double(InlayAPI.maximumRecordingSeconds) { self.finishDictation(atLimit: true) }
             }
         }
         timer.tolerance = 0.025

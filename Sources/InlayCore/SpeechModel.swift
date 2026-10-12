@@ -20,12 +20,12 @@ public struct SpeechModel: Sendable {
 
     // Pinned upstream revision and LFS digest, not a mutable "latest" download.
     public static let parakeet = SpeechModel(
-        id: "parakeet-tdt-0.6b-v3",
-        name: "Parakeet TDT 0.6B v3",
-        filename: "ggml-parakeet-tdt-0.6b-v3-f16.bin",
-        byteCount: 1_255_897_319,
-        sha256: "833bffc9513b2cae867ee9e51633cfd11e4d51aaa5597c8ac02159385a2b426f",
-        downloadURL: URL(string: "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/35156454d1a39de06863303dd209fd2bed6ee079/ggml-parakeet-tdt-0.6b-v3-f16.bin")!
+        id: GeneratedModelPins.speechID,
+        name: GeneratedModelPins.speechName,
+        filename: GeneratedModelPins.speechFilename,
+        byteCount: GeneratedModelPins.speechByteCount,
+        sha256: GeneratedModelPins.speechSHA256,
+        downloadURL: URL(string: GeneratedModelPins.speechURL)!
     )
 }
 
