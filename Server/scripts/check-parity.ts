@@ -37,12 +37,14 @@ for (const [tsName, swiftName] of pairs) {
 }
 const tsLanguages = [
   ...(sharedTS.match(/SUPPORTED_LANGUAGES[^=]*= \[([^\]]+)\]/s)?.[1] ?? "").matchAll(/"(\w+)"/g),
-].map((match) => match[1]);
+].map((match) => match[1] ?? "");
 const swiftLanguages = [
   ...(sharedSwift.match(/supportedLanguages = \[([^\]]+)\]/)?.[1] ?? "").matchAll(/"(\w+)"/g),
 ].map((match) => match[1]);
 if (tsLanguages.join(",") !== swiftLanguages.join(",")) {
-  failures.push(`supported languages differ: TS=[${tsLanguages}] Swift=[${swiftLanguages}]`);
+  failures.push(
+    `supported languages differ: TS=[${tsLanguages.join(",")}] Swift=[${swiftLanguages.join(",")}]`,
+  );
 }
 
 // --- Ports -------------------------------------------------------------------
