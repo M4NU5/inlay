@@ -98,7 +98,7 @@ extension DictationDeliveryStatus {
         }
     }
 
-    var needsAttention: Bool { self == .failed || self == .unconfirmed }
+    var needsAttention: Bool { self == .copied || self == .failed || self == .unconfirmed }
 }
 
 struct DictationHUD: View {
@@ -121,8 +121,12 @@ struct DictationHUD: View {
         }
         .task(id: presentation.id) { await enter() }
         .onChange(of: controller.activity) { _, activity in
-            guard presentation.id != nil, !activity.isBusy else { return }
+            guard presentation.id != nil, !activity.isBusy, !controller.attentionPresented else { return }
             withAnimation(morphAnimation) { expanded = false }
+        }
+        .onChange(of: controller.attentionPresented) { _, presented in
+            guard presentation.id != nil, presented else { return }
+            withAnimation(morphAnimation) { expanded = true }
         }
     }
 
@@ -140,7 +144,7 @@ struct DictationHUD: View {
         guard presentation.id != nil else { return }
         if reduceMotion {
             entered = true
-            expanded = controller.activity.isBusy
+            expanded = controller.activity.isBusy || controller.attentionPresented
             return
         }
         await Task.yield()
@@ -149,7 +153,7 @@ struct DictationHUD: View {
         // This only stages the visual; microphone startup never waits for it.
         do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
         guard !Task.isCancelled, presentation.id != nil else { return }
-        withAnimation(morphAnimation) { expanded = controller.activity.isBusy }
+        withAnimation(morphAnimation) { expanded = controller.activity.isBusy || controller.attentionPresented }
     }
 
     private var capsule: some View {
@@ -196,6 +200,9 @@ struct DictationHUD: View {
     private var expandedContent: some View {
         HStack(spacing: 10) {
             DevBadge()
+            if controller.attentionPresented, !controller.isBusy {
+                attentionContent
+            } else {
             HStack(spacing: 8) {
                 if controller.isRecording {
                     RecordingWaveform(feedback: controller.recordingFeedback, height: 23)
@@ -219,8 +226,45 @@ struct DictationHUD: View {
             .help("Cancel dictation")
             .accessibilityLabel("Cancel dictation")
             .accessibilityIdentifier("hud.cancel")
+            }
         }
         .padding(.horizontal, 12)
+    }
+
+    private var attentionContent: some View {
+        HStack(spacing: 8) {
+            Image(systemName: result.hudSymbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(InlayPalette.warning)
+            Text(result.hudLabel)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(InlayPalette.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            if !controller.lastTranscript.isEmpty {
+                Button {
+                    controller.copyLastTranscript()
+                    if controller.lastDeliveryStatus == .copied { controller.dismissFeedback() }
+                } label: {
+                    Image(systemName: "doc.on.doc").font(.system(size: 11, weight: .semibold))
+                        .frame(width: 22, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Copy again")
+                .accessibilityLabel("Copy again")
+                .accessibilityIdentifier("hud.copy-again")
+            }
+            Button { controller.dismissFeedback() } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    .frame(width: 22, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss")
+            .accessibilityIdentifier("hud.dismiss")
+        }
     }
 
     @ViewBuilder private var compactIcon: some View {

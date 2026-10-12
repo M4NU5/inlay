@@ -158,7 +158,8 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
         statusItem = NSStatusBar.system.statusItem(withLength: InlayBuild.current.isDevelopment ? 62 : 30)
         if let button = statusItem.button {
             InlayBrand.updateStatusButton(button, activity: controller.activity, shortcut: controller.shortcut,
-                                         activationMode: controller.activationMode)
+                                         activationMode: controller.activationMode,
+                                         showsAttention: controller.attentionPresented)
         }
         statusItem.button?.target = self
         statusItem.button?.action = #selector(togglePopover)
@@ -172,12 +173,14 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
         // stable while open, and remeasure current content on the next opening.
         menuContent.sizingOptions = []
         popover.contentViewController = menuContent
-        activitySubscription = controller.$activity.combineLatest(controller.$shortcut, controller.$activationMode)
-            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 && $0.2 == $1.2 }
-            .sink { [weak self] activity, shortcut, activationMode in
-            guard let button = self?.statusItem.button else { return }
-            InlayBrand.updateStatusButton(button, activity: activity, shortcut: shortcut, activationMode: activationMode)
-        }
+        activitySubscription = controller.$activity
+            .combineLatest(controller.$shortcut, controller.$activationMode, controller.$attentionPresented)
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 && $0.2 == $1.2 && $0.3 == $1.3 }
+            .sink { [weak self] activity, shortcut, activationMode, attention in
+                guard let button = self?.statusItem.button else { return }
+                InlayBrand.updateStatusButton(button, activity: activity, shortcut: shortcut,
+                                              activationMode: activationMode, showsAttention: attention)
+            }
     }
 
     private func configureApplicationMenu() {
@@ -230,8 +233,10 @@ private final class DictationPanel: NSPanel {
     private let presentation = DictationHUDPresentation()
     private var noticeSubscription: AnyCancellable?
     private var activitySubscription: AnyCancellable?
+    private var attentionSubscription: AnyCancellable?
     private var compactTask: Task<Void, Never>?
     private var activity: DictationActivity = .idle
+    private var showsAttention = false
     private var showsNotice = false
     private var compact = false
 
@@ -268,6 +273,10 @@ private final class DictationPanel: NSPanel {
             self?.activity = activity
             self?.updateCompactState()
         }
+        attentionSubscription = controller.$attentionPresented.removeDuplicates().sink { [weak self] presented in
+            self?.showsAttention = presented
+            self?.updateCompactState()
+        }
     }
 
     override var canBecomeKey: Bool { false }
@@ -288,7 +297,7 @@ private final class DictationPanel: NSPanel {
 
     private func updateCompactState() {
         compactTask?.cancel()
-        if activity.isBusy {
+        if activity.isBusy || showsAttention {
             compact = false
             updateFrame()
         } else {

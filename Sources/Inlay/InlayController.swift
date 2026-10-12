@@ -86,6 +86,7 @@ final class InlayController: ObservableObject {
     @Published var lastAudioSeconds: Double?
     @Published var lastDelivery = ""
     @Published private(set) var lastDeliveryStatus: DictationDeliveryStatus = .none
+    @Published private(set) var attentionPresented = false
     @Published var errorMessage: String?
     @Published var permissions: PermissionSnapshot
     @Published var isHotkeyActive = false
@@ -866,16 +867,20 @@ final class InlayController: ObservableObject {
         guard !isBusy else { return }
         continuationAnchors.removeAll()
         lastTranscript = ""; lastTranscriptionSeconds = nil; lastAudioSeconds = nil
-        lastDelivery = ""; lastDeliveryStatus = .none; errorMessage = nil; activity = .idle
+        lastDelivery = ""; lastDeliveryStatus = .none; errorMessage = nil; activity = .idle; attentionPresented = false
         recordingFeedback.reset()
     }
 
     func dismissFeedback() {
         guard !isBusy else { return }
         hudTask?.cancel()
+        attentionPresented = false
         recordingFeedback.reset()
         onHUDVisibility?(false)
-        if activity == .success { activity = .idle }
+        if activity == .success || activity == .failed {
+            activity = .idle
+            statusMessage = isServerReady ? "Ready when you are" : serverStatusMessage
+        }
     }
 
     func shutdown() {
@@ -949,7 +954,7 @@ final class InlayController: ObservableObject {
         guard isTest || permissions.accessibility else {
             showError("Allow Accessibility access so Inlay can insert text, then try again."); return false
         }
-        hudTask?.cancel(); errorMessage = nil
+        hudTask?.cancel(); errorMessage = nil; attentionPresented = false
         // Confirmed cursor moves matter only to takes that overlap them.
         if pendingDictations.isEmpty { insertionRebases.removeAll() }
         sessionID = UUID()
@@ -1161,7 +1166,8 @@ final class InlayController: ObservableObject {
                 if sessionID == current {
                     hudProgressText = nil
                     activity = delivered == .failed ? .failed : .success
-                    dismissHUDAfter(seconds: delivered.needsAttention ? 4 : 1.7)
+                    if delivered.needsAttention { attentionPresented = true }
+                    else { dismissHUDAfter(seconds: 1.7) }
                 } else if delivered.needsAttention {
                     // A newer take owns the HUD and will replace this result.
                     errorMessage = "Earlier dictation: \(receipt.message ?? delivered.hudLabel)"
@@ -1349,7 +1355,7 @@ final class InlayController: ObservableObject {
             if let earlier = pendingDictations.last { showEarlierDictation(earlier); return }
             onHUDVisibility?(false)
             recordingFeedback.reset()
-            if activity == .success { activity = .idle; statusMessage = isServerReady ? "Ready when you are" : serverStatusMessage }
+            if (activity == .success || activity == .failed), !attentionPresented { activity = .idle; statusMessage = isServerReady ? "Ready when you are" : serverStatusMessage }
         }
     }
 
