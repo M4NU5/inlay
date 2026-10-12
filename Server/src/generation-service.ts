@@ -860,6 +860,67 @@ export class GenerationService {
   cancel(id: string) {
     return this.mutate(() => this.cancelRecord(id));
   }
+  reprocess(id: string) {
+    return this.mutate(async () => {
+      const record = this.getInternal(id);
+      if (record.importedSource)
+        throw new ServiceError(
+          400,
+          "imported_reprocess",
+          "Imported history cannot be reprocessed.",
+        );
+      if (this.stopping)
+        throw new ServiceError(503, "server_stopping", "The server is shutting down.");
+      if (!terminal(record))
+        throw new ServiceError(
+          409,
+          "generation_active",
+          "This recording is still being processed.",
+        );
+      if (record.status === "completed")
+        throw new ServiceError(
+          409,
+          "already_completed",
+          "A completed recording cannot be transcribed again.",
+        );
+      if (!record.inferenceAudio)
+        throw new ServiceError(404, "artifact_not_found", "This recording has no sealed audio.");
+      try {
+        const file = await open(
+          join(this.directory(record.id), "inference.wav"),
+          constants.O_RDONLY | constants.O_NOFOLLOW,
+        );
+        try {
+          if (!(await file.stat()).isFile()) throw new Error("not a file");
+        } finally {
+          await file.close();
+        }
+      } catch {
+        throw new ServiceError(404, "artifact_not_found", "The sealed audio file is missing.");
+      }
+      record.status = "queued";
+      record.progress = 0;
+      delete record.error;
+      record.rawText = "";
+      record.finalText = "";
+      record.insertionText = "";
+      record.previewText = "";
+      delete record.speech;
+      delete record.proofreading;
+      delete record.textProcessing;
+      delete record.continuation;
+      delete record.delivery;
+      delete record.detectedLanguage;
+      delete record.recognitionHints;
+      delete record.proofreadingHints;
+      delete record.formattingRejectionReason;
+      delete record.consumedListControls;
+      record.updatedAt = now();
+      await this.save(record);
+      this.enqueueProcessing(record.id, undefined);
+      return copy(record);
+    });
+  }
   private async cancelRecord(id: string) {
     const record = this.getInternal(id);
     if (terminal(record)) return record;

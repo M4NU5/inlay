@@ -223,6 +223,13 @@ struct HistoryPage: View {
                 .frame(maxHeight: .infinity)
                 Divider()
                 HStack {
+                    if selected.status == .failed || selected.status == .cancelled,
+                       selected.inferenceAudio != nil, selected.importedSource == nil {
+                        Button("Transcribe again") {
+                            controller.errorMessage = nil
+                            controller.transcribeAgain(selected.id)
+                        }
+                    }
                     if selected.inferenceAudio != nil {
                         Button("Open audio") {
                             controller.errorMessage = nil

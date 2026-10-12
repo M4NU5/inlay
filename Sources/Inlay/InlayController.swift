@@ -661,6 +661,16 @@ final class InlayController: ObservableObject {
         }
     }
 
+    func transcribeAgain(_ id: UUID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await client().reprocess(id)
+                refreshServer()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
     func deleteGeneration(_ id: UUID) {
         Task { [weak self] in
             guard let self else { return }
