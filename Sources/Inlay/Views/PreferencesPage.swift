@@ -70,6 +70,8 @@ private struct DevicePreferencesForm: View {
                 }
                 Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
                     .accessibilityIdentifier("preferences.mute-output")
+                Toggle("Never leave transcripts on the clipboard", isOn: $controller.preserveClipboard)
+                    .accessibilityIdentifier("preferences.preserve-clipboard")
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
                     Text(error).font(.caption).foregroundStyle(InlayPalette.warning)
