@@ -11,6 +11,7 @@ import type {
   WisprFlowImportResult,
   WisprFlowKnownIDsRequest,
 } from "./api.ts";
+import { MAXIMUM_ARTIFACT_BYTES, MAXIMUM_METADATA_BYTES } from "./api.ts";
 import { ServiceError } from "./errors.ts";
 import {
   atomicPrivateWrite,
@@ -20,8 +21,6 @@ import {
   sha256,
 } from "./storage.ts";
 
-const maximumArtifactBytes = 8_388_608;
-const maximumMetadataBytes = 1_048_576;
 const artifactNames: WisprFlowArtifactName[] = [
   "source.json",
   "source.wav",
@@ -68,7 +67,7 @@ const sourceDocument = (data: Uint8Array) => {
 };
 const sourceBytes = (document: JSONObject) => {
   const result = encode(document);
-  if (result.length > maximumArtifactBytes)
+  if (result.length > MAXIMUM_ARTIFACT_BYTES)
     throw new ServiceError(
       413,
       "source_archive_limit",
@@ -526,7 +525,7 @@ export class WisprFlowImports {
       !names.includes("source.json") ||
       names.includes("built-in-audio.bin") ||
       request.artifacts.some(
-        (manifest) => !validManifest(manifest) || manifest.byteCount > maximumArtifactBytes,
+        (manifest) => !validManifest(manifest) || manifest.byteCount > MAXIMUM_ARTIFACT_BYTES,
       ) ||
       (request.unarchivedArtifacts ?? []).some(
         (manifest) => manifest.filename === "source.json" || !validManifest(manifest),
@@ -662,7 +661,7 @@ export class WisprFlowImports {
       try {
         bytes = await readRegularFile(
           join(stage.directory, manifest.filename),
-          maximumArtifactBytes,
+          MAXIMUM_ARTIFACT_BYTES,
         );
       } catch {
         throw new ServiceError(
@@ -713,7 +712,7 @@ export class WisprFlowImports {
       await requireRegularDirectory(earlierDirectory);
       const oldSource = await readRegularFile(
         join(earlierDirectory, "source.json"),
-        maximumArtifactBytes,
+        MAXIMUM_ARTIFACT_BYTES,
       );
       if (sameArtifacts && sameMetadata) {
         const partial = sourceProvenanceIsPartial(sourceDocument(oldSource));
@@ -730,7 +729,7 @@ export class WisprFlowImports {
         source.sourceSHA256 !== sourceHash
           ? mergedSourceJSON(
               oldSource,
-              await readRegularFile(join(stage.directory, "source.json"), maximumArtifactBytes),
+              await readRegularFile(join(stage.directory, "source.json"), MAXIMUM_ARTIFACT_BYTES),
             )
           : oldSource;
       source.sourceSHA256 = sourceHash;
@@ -738,7 +737,7 @@ export class WisprFlowImports {
         const oldHash = source.artifactSHA256[manifest.filename]!;
         const earlier = await readRegularFile(
           join(earlierDirectory, manifest.filename),
-          maximumArtifactBytes,
+          MAXIMUM_ARTIFACT_BYTES,
         );
         if (sha256(earlier) !== oldHash)
           throw new ServiceError(
@@ -761,12 +760,12 @@ export class WisprFlowImports {
       source.artifactSHA256["source.json"] = sha256(reconciliation.data);
       for (const filename of source.artifactNames)
         if (!stage.uploaded.has(filename))
-          await readRegularFile(join(earlierDirectory, filename), maximumArtifactBytes);
+          await readRegularFile(join(earlierDirectory, filename), MAXIMUM_ARTIFACT_BYTES);
       for (const filename of await readdir(earlierDirectory)) {
         if (await exists(join(stage.directory, filename))) continue;
         await atomicPrivateWrite(
           join(stage.directory, filename),
-          await readRegularFile(join(earlierDirectory, filename), maximumArtifactBytes),
+          await readRegularFile(join(earlierDirectory, filename), MAXIMUM_ARTIFACT_BYTES),
         );
       }
       source.sourceStatus = request.sourceStatus ?? source.sourceStatus;
@@ -790,7 +789,7 @@ export class WisprFlowImports {
     const recordID = randomUUID().toUpperCase(),
       now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
     const reconciliation = reconciledSourceJSON(
-      await readRegularFile(join(stage.directory, "source.json"), maximumArtifactBytes),
+      await readRegularFile(join(stage.directory, "source.json"), MAXIMUM_ARTIFACT_BYTES),
       incomingHashes,
     );
     await atomicPrivateWrite(join(stage.directory, "source.json"), reconciliation.data);
@@ -859,7 +858,7 @@ export class WisprFlowImports {
     }
     if (
       !data.length ||
-      data.length > maximumArtifactBytes ||
+      data.length > MAXIMUM_ARTIFACT_BYTES ||
       !object(document) ||
       document.provider !== "wispr-flow"
     )
@@ -875,7 +874,7 @@ export class WisprFlowImports {
     await requireRegularDirectory(this.root);
     await ensureDirectory(versions);
     if (await exists(version)) {
-      if (sha256(await readRegularFile(version, maximumArtifactBytes)) !== hash)
+      if (sha256(await readRegularFile(version, MAXIMUM_ARTIFACT_BYTES)) !== hash)
         throw new ServiceError(
           500,
           "invalid_dictionary_archive",
@@ -899,7 +898,7 @@ export class WisprFlowImports {
   }
   private async writeRecord(directory: string, record: GenerationRecord) {
     const metadata = Buffer.from(JSON.stringify(record));
-    if (metadata.length > maximumMetadataBytes)
+    if (metadata.length > MAXIMUM_METADATA_BYTES)
       throw new ServiceError(
         413,
         "metadata_too_large",
