@@ -67,7 +67,7 @@ struct HistoryPage: View {
                 Spacer()
                 Button("Import Wispr Flow history") {
                     showingWisprFlowImport = true
-                    controller.prepareWisprFlowImport()
+                    controller.wisprImport.prepareWisprFlowImport()
                 }
                 .disabled(controller.isBusy)
                 .accessibilityIdentifier("history.import-wispr-flow")
@@ -88,8 +88,8 @@ struct HistoryPage: View {
             selectedID = nil
         }
         .sheet(isPresented: $showingWisprFlowImport) {
-            WisprFlowImportSheet(controller: controller)
-                .onDisappear { controller.closeWisprFlowImportSheet() }
+            WisprFlowImportSheet(controller: controller, driver: controller.wisprImport)
+                .onDisappear { controller.wisprImport.closeWisprFlowImportSheet() }
         }
         .confirmationDialog("Delete this dictation from the server?", isPresented: $confirmingDelete) {
             if let selected {
@@ -364,6 +364,7 @@ struct HistoryPage: View {
 
 private struct WisprFlowImportSheet: View {
     @ObservedObject var controller: InlayController
+    @ObservedObject var driver: WisprFlowImportDriver
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -372,7 +373,7 @@ private struct WisprFlowImportSheet: View {
                 .font(.title2.weight(.semibold))
 
             Group {
-                switch controller.wisprFlowImportState {
+                switch driver.state {
                 case .idle, .preparing:
                     VStack(alignment: .leading, spacing: 12) {
                         ProgressView().controlSize(.small)
@@ -411,7 +412,7 @@ private struct WisprFlowImportSheet: View {
     }
 
     private var isImporting: Bool {
-        if case .running = controller.wisprFlowImportState { return true }
+        if case .running = driver.state { return true }
         return false
     }
 
@@ -514,22 +515,22 @@ private struct WisprFlowImportSheet: View {
     }
 
     @ViewBuilder private var actions: some View {
-        switch controller.wisprFlowImportState {
+        switch driver.state {
         case .idle, .preparing:
-            Button("Cancel") { controller.cancelWisprFlowImport(); dismiss() }
+            Button("Cancel") { driver.cancelWisprFlowImport(); dismiss() }
         case .preview(_, _, let destinationError):
             Button("Cancel") { dismiss() }
-            Button("Import") { controller.startWisprFlowImport() }
+            Button("Import") { driver.startWisprFlowImport() }
                 .buttonStyle(.borderedProminent)
                 .disabled(destinationError != nil || controller.serverHealth?.apiVersion != InlayAPI.version || controller.isBusy)
                 .accessibilityIdentifier("wispr-flow-import.start")
         case .running:
-            Button("Cancel import") { controller.cancelWisprFlowImport() }
+            Button("Cancel import") { driver.cancelWisprFlowImport() }
         case .finished:
             Button("Done") { dismiss() }
         case .failed:
             Button("Close") { dismiss() }
-            Button("Try again") { controller.prepareWisprFlowImport() }
+            Button("Try again") { driver.prepareWisprFlowImport() }
         }
     }
 }
