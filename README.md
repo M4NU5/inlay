@@ -98,3 +98,5 @@ All connected Macs share history, tagged by device. Both original and inference 
 - [Parakeet helper](Engine/README.md) and [Qwen helpers](TextEngine/README.md)
 
 [MIT](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+
+Distribution builds use `./scripts/build-app.sh --with-server --dist`, which fails immediately unless the Developer ID and notary environment variables listed in the script are set, and produces a notarized DMG containing the app, the bundled server, and its LaunchAgent template.

@@ -41,3 +41,7 @@ open --env "INLAY_CLIENT_DATA_DIR=$PWD/.local/dev-client" "build/Inlay Dev.app"
 - For lifecycle or recovery changes, use only the instance and archive created for this task. Reopen the app or restart that isolated server as needed, then inspect persisted state through the app.
 - Record what you used and observed. State which flows could not be exercised because a Mac, microphone, permissions, or model assets were unavailable. Static checks and an HTTP health page do not establish native UI or inference behavior.
 - When changing Swift or the transport contract, run `bun run generate:api --check` and `swift build --force-resolved-versions` on macOS. Compile affected native helpers when changing C++ or MLX. These are build/static checks, not behavioral test suites.
+
+## Bundled local server (Release)
+
+`./scripts/build-app.sh --with-server` bundles `build/server` into the app. On first run the Release app lands on **This Mac**, where model downloads and the background-service install live. To remove the agent, use the Uninstall button beside **Local server**, which removes it while keeping data and models; `./scripts/install-service.sh --uninstall` does the same from a checkout.
