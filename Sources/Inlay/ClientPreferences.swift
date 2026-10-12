@@ -79,6 +79,17 @@ final class ClientPreferencesStore: ObservableObject {
     }
 
     @discardableResult
+    func replaceToken(_ newToken: String) -> Bool {
+        let trimmed = newToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.writeToken(trimmed, account: credentialAccount + "|" + endpoint) else {
+            errorMessage = "The server credential could not be saved in Keychain."
+            return false
+        }
+        token = trimmed
+        return true
+    }
+
+    @discardableResult
     private func persist() -> Bool {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,

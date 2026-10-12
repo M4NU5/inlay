@@ -159,7 +159,7 @@ for ((attempt = 0; attempt < 100; attempt++)); do
         exit 1
     fi
     if curl --fail --silent --max-time 1 "http://127.0.0.1:$server_port/v1/liveness" > /dev/null; then
-        printf 'Dev server: http://localhost:%s (PID %s)\nLog: %s\n' "$server_port" "$server_pid" "$log_file"
+        printf 'Dev server: http://localhost:%s (PID %s)\nLog: %s\nAdmin token file: %s\n' "$server_port" "$server_pid" "$log_file" "${INLAY_SERVER_TOKEN_FILE:-${INLAY_SERVER_DATA_DIR:-$state_dir/server}/admin-token}"
         launch_client
         exit 0
     fi

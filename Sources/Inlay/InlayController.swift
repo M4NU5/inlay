@@ -133,6 +133,8 @@ final class InlayController: ObservableObject {
     @Published private(set) var sharedPreferences: PreferencesSnapshot?
     @Published private(set) var generations: [GenerationRecord] = []
     @Published private(set) var undeliveredResults: [GenerationRecord] = []
+    @Published private(set) var devices: [DeviceSummary] = []
+    @Published private(set) var legacyEnrollmentClosed = false
     @Published private(set) var isLoadingHistory = false
     @Published private(set) var hasMoreHistory = false
     @Published private(set) var historySourceFilter = "all"
@@ -329,10 +331,18 @@ final class InlayController: ObservableObject {
                     hasMoreHistory = history.nextCursor != nil
                 }
             }
+            if refreshData { await refreshDevices() }
             await reconcilePendingGenerations()
         } catch is CancellationError {
         } catch {
             guard endpoint == preferences.endpoint, !Task.isCancelled else { return }
+            if let clientError = error as? ServerClientError,
+               case .rejected(let status, _, let code) = clientError,
+               status == 403, code == "enrollment_required", !isBusy,
+               await enrollThisDevice() {
+                refreshServer()
+                return
+            }
             serverHealth = nil
             serverStatusMessage = Self.connectionMessage(error)
             if !isBusy, activity == .idle { statusMessage = serverStatusMessage }
@@ -449,7 +459,7 @@ final class InlayController: ObservableObject {
                 } catch {
                     knownCount = nil
                     if let clientError = error as? ServerClientError,
-                       case .rejected(let status, _) = clientError, status == 404 {
+                       case .rejected(let status, _, _) = clientError, status == 404 {
                         destinationError = "This server does not support Wispr Flow imports. Connect the new Inlay Dev server."
                     } else {
                         destinationError = "Cannot check the destination server: \(error.localizedDescription)"
@@ -593,7 +603,7 @@ final class InlayController: ObservableObject {
                     }
                     if error is URLError { stoppedEarly = true }
                     if let clientError = error as? ServerClientError,
-                       case .rejected(let status, _) = clientError, [401, 403].contains(status) {
+                       case .rejected(let status, _, _) = clientError, [401, 403].contains(status) {
                         stoppedEarly = true
                     }
                 }
@@ -679,6 +689,42 @@ final class InlayController: ObservableObject {
                 sharedPreferences = saved
                 errorMessage = nil
             } catch { errorMessage = error.localizedDescription; refreshServer() }
+        }
+    }
+
+    private func enrollThisDevice() async -> Bool {
+        guard let connection = try? client() else { return false }
+        do {
+            let response = try await connection.enroll(
+                device: DeviceIdentity(id: preferences.deviceID, name: preferences.deviceName))
+            return preferences.replaceToken(response.token)
+        } catch { return false }
+    }
+
+    func refreshDevices() async {
+        guard let connection = try? client(), let list = try? await connection.devices() else { return }
+        devices = list.devices
+        legacyEnrollmentClosed = list.legacyEnrollmentClosed
+    }
+
+    func revokeDevice(_ id: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await client().revokeDevice(id)
+                await refreshDevices()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func closeLegacyEnrollment() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let list = try await client().closeLegacyEnrollment()
+                devices = list.devices
+                legacyEnrollmentClosed = list.legacyEnrollmentClosed
+            } catch { errorMessage = error.localizedDescription }
         }
     }
 
@@ -847,7 +893,7 @@ final class InlayController: ObservableObject {
                 do {
                     _ = try await connection.finish(entry.id, value: FinishGenerationRequest(
                         inferenceFrames: entry.inferenceFrames, originalFrames: entry.originalFrames))
-                } catch let ServerClientError.rejected(status, _) where (400..<500).contains(status) && ![408, 429].contains(status) {
+                } catch let ServerClientError.rejected(status, _, _) where (400..<500).contains(status) && ![408, 429].contains(status) {
                     removePendingEntry(entry.id)
                 } catch {}
             case .queued, .transcribing, .proofreading:
@@ -1131,7 +1177,7 @@ final class InlayController: ObservableObject {
                 let uploadOutcome = try await pending.upload.value
                 var finish = uploadOutcome.finish
                 if !uploadOutcome.complete, finish.inferenceFrames < 4_000 {
-                    throw ServerClientError.rejected(422, "The interrupted recording was too short to save.")
+                    throw ServerClientError.rejected(422, "The interrupted recording was too short to save.", "")
                 }
                 try Task.checkCancellation()
                 stoppedAudio?.cleanup()
@@ -1153,9 +1199,9 @@ final class InlayController: ObservableObject {
                 addPendingEntry(id: id, finish: finish, isTest: test)
                 var result: GenerationRecord
                 do { result = try await connection.finish(id, value: finish) }
-                catch let ServerClientError.rejected(status, message) where (400..<500).contains(status) && ![408, 429].contains(status) {
+                catch let ServerClientError.rejected(status, message, code) where (400..<500).contains(status) && ![408, 429].contains(status) {
                     pending.sealed = false // The server answered without sealing, so cancel promptly.
-                    throw ServerClientError.rejected(status, message)
+                    throw ServerClientError.rejected(status, message, code)
                 }
                 try Task.checkCancellation()
                 if !result.status.isTerminal {
@@ -1166,7 +1212,7 @@ final class InlayController: ObservableObject {
                 try Task.checkCancellation()
                 guard result.status == .completed else {
                     pending.resolved = true // Terminal on the server; visible in History.
-                    throw ServerClientError.rejected(422, result.error ?? "The server could not process this recording.")
+                    throw ServerClientError.rejected(422, result.error ?? "The server could not process this recording.", "")
                 }
                 // Processing and uploads overlap. Clipboard/paste transactions
                 // remain ordered and each keeps its original destination.

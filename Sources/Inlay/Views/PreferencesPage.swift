@@ -19,6 +19,9 @@ private struct DevicePreferencesForm: View {
     @State private var token = ""
     @State private var deviceName = ""
     @State private var showingDiagnostics = false
+    @State private var deviceToRevoke: DeviceSummary?
+
+    private var usesPlainHTTP: Bool { (try? ServerEndpoint(endpoint))?.usesPlainHTTP ?? false }
 
     var body: some View {
         Form {
@@ -26,11 +29,11 @@ private struct DevicePreferencesForm: View {
                 TextField("Server address", text: $endpoint, prompt: Text("http://localhost:8391"))
                     .autocorrectionDisabled()
                     .accessibilityIdentifier("preferences.endpoint")
-                SecureField("Access token", text: $token)
+                SecureField("Server token", text: $token)
                     .accessibilityIdentifier("preferences.token")
                 Text(InlayBuild.current.isDevelopment
-                    ? "Dev server token: .local/dev-server/token (created by bun run dev)."
-                    : "Use the token from your server's token file (its --token-file path, or /etc/inlay/token on Linux).")
+                    ? "Paste the admin token (.local/dev-server/token) once; this Mac then keeps its own revocable credential."
+                    : "Paste the server's admin token once (admin-token in its data folder, or its --token-file); this Mac then keeps its own revocable credential.")
                     .font(.caption)
                     .foregroundStyle(InlayPalette.muted)
                 TextField("Device name", text: $deviceName)
@@ -45,6 +48,44 @@ private struct DevicePreferencesForm: View {
                         .accessibilityIdentifier("preferences.connect")
                 }
                 InlayActionMessage(message: preferences.errorMessage ?? controller.errorMessage)
+                if usesPlainHTTP {
+                    Text("This connection is unencrypted unless Tailscale carries it.")
+                        .font(.caption)
+                        .foregroundStyle(InlayPalette.warning)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    if controller.serverHealth != nil {
+                        ForEach(controller.devices, id: \.id) { device in
+                            HStack {
+                                Text(device.name)
+                                if device.id == preferences.deviceID {
+                                    Text("This Mac").font(.caption).foregroundStyle(InlayPalette.muted)
+                                }
+                                Spacer()
+                                if let revoked = device.revokedAt {
+                                    Text("Revoked \(revoked.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption).foregroundStyle(InlayPalette.muted)
+                                } else {
+                                    if let seen = device.lastSeenAt {
+                                        Text(seen.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.caption).foregroundStyle(InlayPalette.muted)
+                                    }
+                                    if device.id != preferences.deviceID {
+                                        Button("Revoke") { deviceToRevoke = device }
+                                    }
+                                }
+                            }
+                        }
+                        if !controller.legacyEnrollmentClosed {
+                            HStack {
+                                Text("The old shared token can still enroll new Macs.").font(.caption)
+                                Spacer()
+                                Button("Stop accepting it") { controller.closeLegacyEnrollment() }
+                            }
+                        }
+                    }
+                }
+                .frame(minHeight: 52, alignment: .topLeading)
             } header: { Text("Connection").textCase(nil) }
 
             Section {
@@ -133,6 +174,18 @@ private struct DevicePreferencesForm: View {
             token = preferences.token
             deviceName = preferences.deviceName
             controller.refreshPermissions()
+            Task { await controller.refreshDevices() }
+        }
+        .onChange(of: preferences.token) { _, newToken in token = newToken }
+        .confirmationDialog("Revoke this device?", isPresented: Binding(
+            get: { deviceToRevoke != nil }, set: { if !$0 { deviceToRevoke = nil } })) {
+            Button("Revoke", role: .destructive) {
+                if let device = deviceToRevoke { controller.revokeDevice(device.id) }
+                deviceToRevoke = nil
+            }
+            Button("Cancel", role: .cancel) { deviceToRevoke = nil }
+        } message: {
+            Text("It will lose access to this server immediately.")
         }
     }
 }

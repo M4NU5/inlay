@@ -4,7 +4,7 @@ import InlayAPI
 
 enum ServerClientError: LocalizedError {
     case invalidEndpoint
-    case rejected(Int, String)
+    case rejected(Int, String, String)
     case invalidResponse
     case disconnected
     case processingTimedOut
@@ -15,7 +15,7 @@ enum ServerClientError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint: "The server address is invalid."
-        case .rejected(_, let message): message
+        case .rejected(_, let message, _): message
         case .invalidResponse: "The server returned an invalid response."
         case .disconnected: "The server connection was interrupted. Any completed result is available in shared history."
         case .processingTimedOut: "The server is still processing this recording. The result will be ready to copy when it finishes."
@@ -94,9 +94,11 @@ struct ServerClient: Sendable {
         guard let response = response as? HTTPURLResponse else { throw ServerClientError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
             let message: String
+            var code = ""
             if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let detail = object["message"] as? String ?? object["error"] as? String {
                 message = String(detail.prefix(1_000))
+                code = object["code"] as? String ?? ""
             } else {
                 switch response.statusCode {
                 case 401, 403: message = "The server credential was rejected. Update it in Preferences."
@@ -106,7 +108,7 @@ struct ServerClient: Sendable {
                 default: message = "The server could not complete the request (HTTP \(response.statusCode))."
                 }
             }
-            throw ServerClientError.rejected(response.statusCode, message)
+            throw ServerClientError.rejected(response.statusCode, message, code)
         }
     }
 }
@@ -149,6 +151,14 @@ final class AudioChunkPipe: @unchecked Sendable {
 
 extension ServerClient {
     func health() async throws -> ServerHealth { try await json(path: "v1/health") }
+    func enroll(device: DeviceIdentity) async throws -> EnrollDeviceResponse {
+        try await json(path: "v1/devices/enroll", method: "POST", body: Self.encode(EnrollDeviceRequest(device: device)))
+    }
+    func devices() async throws -> DeviceList { try await json(path: "v1/devices") }
+    func revokeDevice(_ id: String) async throws { try await send(path: "v1/devices/\(id)", method: "DELETE") }
+    func closeLegacyEnrollment() async throws -> DeviceList {
+        try await json(path: "v1/devices/close-legacy-enrollment", method: "POST")
+    }
     func preferences() async throws -> PreferencesSnapshot { try await json(path: "v1/preferences") }
     func updatePreferences(_ value: PreferencesSnapshot) async throws -> PreferencesSnapshot {
         try await json(path: "v1/preferences", method: "PUT", body: Self.encode(value))
@@ -329,7 +339,7 @@ extension ServerClient {
         if let error = error as? ServerClientError {
             switch error {
             case .disconnected: return true
-            case .rejected(let status, _): return [408, 429, 502, 503, 504].contains(status)
+            case .rejected(let status, _, _): return [408, 429, 502, 503, 504].contains(status)
             default: return false
             }
         }
