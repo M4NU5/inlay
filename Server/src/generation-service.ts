@@ -174,7 +174,9 @@ export class GenerationService {
   private records = new Map<string, GenerationRecord>();
   private uploads = new Map<string, Partial<Record<AudioKind, Upload>>>();
   private processingControllers = new Map<string, AbortController>();
-  private processingQueue: Promise<void> = Promise.resolve();
+  private speechStageQueue: Promise<unknown> = Promise.resolve();
+  private proofStageQueue: Promise<unknown> = Promise.resolve();
+  private processingTasks = new Set<Promise<void>>();
   private warmController?: AbortController;
   private warmTask?: Promise<void>;
   private warming = false;
@@ -231,6 +233,15 @@ export class GenerationService {
   private withImportQueue<T>(operation: () => Promise<T> | T): Promise<T> {
     const result = this.importQueue.then(operation);
     this.importQueue = result.catch(() => {});
+    return result;
+  }
+  /** One job per helper at a time; speech of take N+1 overlaps proof of take N. */
+  private withStage<T>(stage: "speech" | "proof", operation: () => Promise<T> | T): Promise<T> {
+    const queue = stage === "speech" ? this.speechStageQueue : this.proofStageQueue;
+    const result = queue.then(operation);
+    const tail = result.catch(() => {});
+    if (stage === "speech") this.speechStageQueue = tail;
+    else this.proofStageQueue = tail;
     return result;
   }
   private directory(id: string) {
@@ -451,7 +462,9 @@ export class GenerationService {
     for (const controller of this.processingControllers.values()) controller.abort();
     await this.inference.shutdown();
     await Promise.allSettled(
-      [this.processingQueue, this.warmTask].filter((task): task is Promise<void> => Boolean(task)),
+      [...this.processingTasks, this.warmTask].filter((task): task is Promise<void> =>
+        Boolean(task),
+      ),
     );
     // Sealed work survives shutdown as queued; only unsealed receiving
     // sessions are cancelled. This runs after the queue drains so the
@@ -1251,20 +1264,19 @@ export class GenerationService {
     const enqueuedAt = performance.now();
     const controller = new AbortController();
     this.processingControllers.set(id, controller);
-    // A sealed recording waits for all earlier processing and cancellation cleanup.
-    // Uploads and subscribers remain independent of this inference-only queue.
-    this.processingQueue = this.processingQueue
-      .then(async () => {
-        // Helper loads join any in-flight warmup, so jobs never wait for proofreading to load.
-        if (!this.stopping && !controller.signal.aborted)
-          await this.process(id, previous, controller.signal, enqueuedAt);
-      })
-      .catch((error) => logError("processing_chain_failed", error, { id }))
-      .finally(() => {
-        this.processingControllers.delete(id);
-        this.processingOrder = this.processingOrder.filter((queuedID) => queuedID !== id);
-        this.beginWarmup();
-      });
+    // Jobs run concurrently; withStage serializes each helper's stage, so
+    // completion order still equals seal order on both FIFO stages.
+    const task = (async () => {
+      if (!this.stopping && !controller.signal.aborted)
+        await this.process(id, previous, controller.signal, enqueuedAt);
+    })().catch((error) => logError("processing_chain_failed", error, { id }));
+    this.processingTasks.add(task);
+    void task.finally(() => {
+      this.processingControllers.delete(id);
+      this.processingOrder = this.processingOrder.filter((queuedID) => queuedID !== id);
+      this.processingTasks.delete(task);
+      this.beginWarmup();
+    });
   }
   private async process(
     id: string,
@@ -1272,109 +1284,118 @@ export class GenerationService {
     signal: AbortSignal,
     enqueuedAt = performance.now(),
   ) {
-    const startedAt = performance.now();
+    let startedAt = performance.now();
     let transcribeMs = 0;
     let proofMs = 0;
     try {
-      let record = await this.withGenerationLock(id, async () => {
-        const record = this.getInternal(id);
-        signal.throwIfAborted();
-        if (terminal(record)) return undefined;
-        record.status = "transcribing";
-        await this.save(record);
-        return record;
-      });
-      if (!record) return;
-      const settings = record.settings.preferences;
-      const transcribeStartedAt = performance.now();
-      const speech = await this.inference.transcribe(
-        join(this.directory(id), "inference.wav"),
-        settings.language,
-        // Parakeet has no vocabulary prompt; dictionary rules apply after recognition.
-        [],
-        (value) => {
-          this.progress(id, value);
-        },
-        signal,
-        record.inferenceAudio ? record.inferenceAudio.frameCount / 16000 : undefined,
-      );
-      transcribeMs = Math.round(performance.now() - transcribeStartedAt);
-      signal.throwIfAborted();
-      record.rawText = speech.text;
-      record.detectedLanguage = speech.language === "auto" ? undefined : speech.language;
-      record.recognitionHints = speech.hints;
-      record.speech = {
-        modelID: "parakeet-tdt-0.6b-v3",
-        modelSHA256: speech.modelSHA256,
-        backend: this.speechBackend,
-        engineVersion: speech.engineVersion,
-        processingSeconds: speech.processingSeconds,
-      };
-      const cleaned = cleanTranscript(speech.text);
-      const transcript = applyDictionary(settings.dictionary, cleaned, 24 * 1024);
-      const structured = formatSpokenList(transcript, previous?.list);
-      record.formattingRejectionReason = structured.formattingRejectionReason;
-      record.consumedListControls = structured.consumedControls;
-      if (settings.textCorrectionEnabled && structured.text) {
-        const updated = await this.withGenerationLock(id, async () => {
+      const speechResult = await this.withStage("speech", async () => {
+        startedAt = performance.now();
+        let record = await this.withGenerationLock(id, async () => {
+          const record = this.getInternal(id);
           signal.throwIfAborted();
-          if (terminal(this.getInternal(id))) return false;
-          record!.status = "proofreading";
-          delete record!.progress;
-          await this.save(record!);
-          return true;
+          if (terminal(record)) return undefined;
+          record.status = "transcribing";
+          await this.save(record);
+          return record;
         });
-        if (!updated) return;
-      }
-      const proofStartedAt = performance.now();
-      const processing = await this.proofread(
-        structured.text,
-        settings,
-        cleaned !== transcript,
-        speech.language === "auto" ? settings.language : speech.language,
-        signal,
-      );
-      proofMs = Math.round(performance.now() - proofStartedAt);
-      signal.throwIfAborted();
-      record.textProcessing = processing;
-      if (["applied", "unchanged", "rejected"].includes(processing.status)) {
-        const all = dictionaryVocabularyTerms(settings.dictionary),
-          included = modelHints(all);
-        record.proofreadingHints = {
-          includedTerms: included,
-          omittedTerms: all.filter((term) => !included.includes(term)),
-        };
-      }
-      if (settings.textCorrectionEnabled)
-        record.proofreading = {
-          modelID: "Qwen3-4B-Instruct-2507",
-          modelSHA256: processing.modelSHA256,
-          backend: this.proofBackend,
-          engineVersion: processing.engineVersion,
-          processingSeconds: processing.processingSeconds,
-        };
-      const formatted = { ...structured, text: processing.outputText };
-      const composition = composeDictation(formatted, previous);
-      record.finalText = formatted.text;
-      record.insertionText = composition.insertion;
-      record.previewText = composition.preview;
-      record.continuation = composition.continuation;
-      record.status = "completed";
-      record.updatedAt = now();
-      record.progress = 1;
-      await this.withGenerationLock(id, async () => {
+        if (!record) return undefined;
+        const settings = record.settings.preferences;
+        const transcribeStartedAt = performance.now();
+        const speech = await this.inference.transcribe(
+          join(this.directory(id), "inference.wav"),
+          settings.language,
+          // Parakeet has no vocabulary prompt; dictionary rules apply after recognition.
+          [],
+          (value) => {
+            this.progress(id, value);
+          },
+          signal,
+          record.inferenceAudio ? record.inferenceAudio.frameCount / 16000 : undefined,
+        );
+        transcribeMs = Math.round(performance.now() - transcribeStartedAt);
         signal.throwIfAborted();
-        if (terminal(this.getInternal(id))) return;
-        await atomicPrivateWrite(join(this.directory(id), "transcript.txt"), record!.finalText);
-        await this.save(record!);
+        record.rawText = speech.text;
+        record.detectedLanguage = speech.language === "auto" ? undefined : speech.language;
+        record.recognitionHints = speech.hints;
+        record.speech = {
+          modelID: "parakeet-tdt-0.6b-v3",
+          modelSHA256: speech.modelSHA256,
+          backend: this.speechBackend,
+          engineVersion: speech.engineVersion,
+          processingSeconds: speech.processingSeconds,
+        };
+        const cleaned = cleanTranscript(speech.text);
+        const transcript = applyDictionary(settings.dictionary, cleaned, 24 * 1024);
+        const structured = formatSpokenList(transcript, previous?.list);
+        record.formattingRejectionReason = structured.formattingRejectionReason;
+        record.consumedListControls = structured.consumedControls;
+        return { record, settings, speech, cleaned, transcript, structured };
       });
-      logInfo("generation_processed", {
-        id,
-        queueWaitMs: Math.round(startedAt - enqueuedAt),
-        transcribeMs,
-        proofMs,
-        totalMs: Math.round(performance.now() - startedAt),
-        status: "completed",
+      if (!speechResult) return;
+      const { settings, speech, cleaned, transcript, structured } = speechResult;
+      const record = speechResult.record;
+      await this.withStage("proof", async () => {
+        if (settings.textCorrectionEnabled && structured.text) {
+          const updated = await this.withGenerationLock(id, async () => {
+            signal.throwIfAborted();
+            if (terminal(this.getInternal(id))) return false;
+            record.status = "proofreading";
+            delete record.progress;
+            await this.save(record);
+            return true;
+          });
+          if (!updated) return;
+        }
+        const proofStartedAt = performance.now();
+        const processing = await this.proofread(
+          structured.text,
+          settings,
+          cleaned !== transcript,
+          speech.language === "auto" ? settings.language : speech.language,
+          signal,
+        );
+        proofMs = Math.round(performance.now() - proofStartedAt);
+        signal.throwIfAborted();
+        record.textProcessing = processing;
+        if (["applied", "unchanged", "rejected"].includes(processing.status)) {
+          const all = dictionaryVocabularyTerms(settings.dictionary),
+            included = modelHints(all);
+          record.proofreadingHints = {
+            includedTerms: included,
+            omittedTerms: all.filter((term) => !included.includes(term)),
+          };
+        }
+        if (settings.textCorrectionEnabled)
+          record.proofreading = {
+            modelID: "Qwen3-4B-Instruct-2507",
+            modelSHA256: processing.modelSHA256,
+            backend: this.proofBackend,
+            engineVersion: processing.engineVersion,
+            processingSeconds: processing.processingSeconds,
+          };
+        const formatted = { ...structured, text: processing.outputText };
+        const composition = composeDictation(formatted, previous);
+        record.finalText = formatted.text;
+        record.insertionText = composition.insertion;
+        record.previewText = composition.preview;
+        record.continuation = composition.continuation;
+        record.status = "completed";
+        record.updatedAt = now();
+        record.progress = 1;
+        await this.withGenerationLock(id, async () => {
+          signal.throwIfAborted();
+          if (terminal(this.getInternal(id))) return;
+          await atomicPrivateWrite(join(this.directory(id), "transcript.txt"), record.finalText);
+          await this.save(record);
+        });
+        logInfo("generation_processed", {
+          id,
+          queueWaitMs: Math.round(startedAt - enqueuedAt),
+          transcribeMs,
+          proofMs,
+          totalMs: Math.round(performance.now() - startedAt),
+          status: "completed",
+        });
       });
     } catch (error) {
       if (!signal.aborted)
