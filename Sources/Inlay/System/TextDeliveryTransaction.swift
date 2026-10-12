@@ -87,7 +87,7 @@ struct TextDeliveryTransaction {
             switch environment.replaceSelection(text) {
             case .unsupported: break
             case .acknowledged, .uncertain:
-                let confirmation = await confirm(text, within: Self.confirmationWindow)
+                let confirmation = await confirm(text)
                 guard !Task.isCancelled, confirmation != .blocked else {
                     return .unconfirmed(clipboardBackup: false)
                 }
@@ -105,10 +105,7 @@ struct TextDeliveryTransaction {
         }
         var clipboard = DeliveryClipboardLease(pasteboard: pasteboard, snapshot: snapshot)
         defer { clipboard.restore() }
-        // Without a backup, learn when the target reads the staged paste so the
-        // previous clipboard can return without waiting out the whole window.
-        let pasteRead = preservesClipboard ? PasteboardReadSignal(text: text) : nil
-        guard clipboard.write(text, transient: true, signalling: pasteRead) else {
+        guard clipboard.write(text, transient: true) else {
             return .failed(reason: "The clipboard changed or could not accept the transcript. Your words are ready to copy.")
         }
 
@@ -133,7 +130,7 @@ struct TextDeliveryTransaction {
         switch environment.postPaste({
             !Task.isCancelled && !shouldDeferForCapture && pasteboard.changeCount == stagedChangeCount
         }) {
-        case .sent: pasteRead?.arm()
+        case .sent: break
         case .blocked(let reason):
             if shouldDeferForCapture { return nil }
             return .failed(reason: reason)
@@ -144,11 +141,9 @@ struct TextDeliveryTransaction {
                 .failed(reason: "macOS could not send the paste. Your words are ready to copy.")
         }
 
-        // Without a backup, restoring early could let a slow editor paste the
-        // previous clipboard instead, so keep the staged paste available longer
-        // unless the target has already read it.
-        let confirmation = await confirm(text, within: preservesClipboard ? Self.restoreGrace : Self.confirmationWindow,
-                                         pasteRead: pasteRead)
+        // Without a backup, a slow editor that reads after restoration pastes the
+        // previous clipboard instead, so hold the staged paste longer.
+        let confirmation = await confirm(text, within: .milliseconds(preservesClipboard ? 1_500 : 700))
         guard !Task.isCancelled, confirmation != .blocked else {
             return .unconfirmed(clipboardBackup: false)
         }
@@ -157,8 +152,6 @@ struct TextDeliveryTransaction {
     }
 
     private static let cancelled = "Dictation was cancelled. Nothing was copied."
-    private static let confirmationWindow = Duration.milliseconds(700)
-    private static let restoreGrace = Duration.milliseconds(1_500)
 
     private var shouldDeferForCapture: Bool {
         environment.waitUntilReady != nil && environment.isCaptureActive?() == true
@@ -179,12 +172,10 @@ struct TextDeliveryTransaction {
         return .blocked(reason: "A keyboard shortcut is still held. Your words are ready to copy.")
     }
 
-    private func confirm(_ text: String, within window: Duration,
-                         pasteRead: PasteboardReadSignal? = nil) async -> DeliveryConfirmation {
+    private func confirm(_ text: String, within window: Duration = .milliseconds(700)) async -> DeliveryConfirmation {
         let deadline = ContinuousClock.now.advanced(by: window)
         let lastAttempt = Int(window / .milliseconds(100))
         var lastObserved: DeliveryConfirmation = .pending
-        var sawPasteRead = false
         for attempt in 0...lastAttempt {
             guard !Task.isCancelled else { return .blocked }
             guard attempt == 0 || ContinuousClock.now < deadline else { break }
@@ -193,12 +184,6 @@ struct TextDeliveryTransaction {
             // Editors without caret metadata still need time to consume their
             // queued paste before a newer pre-delivery clipboard is restored.
             guard lastObserved == .pending || lastObserved == .unavailable else { return lastObserved }
-            // The paste has its data once the target read it. Allow one more
-            // poll for the caret to confirm, then stop holding the clipboard.
-            if pasteRead?.wasRead == true {
-                if sawPasteRead { break }
-                sawPasteRead = true
-            }
             guard attempt < lastAttempt, ContinuousClock.now < deadline else { break }
             do { try await environment.pause(100_000_000) }
             catch { return .blocked }
@@ -245,17 +230,13 @@ private struct DeliveryClipboardLease {
         ownedChangeCount.map { pasteboard.changeCount == $0 } ?? false
     }
 
-    mutating func write(_ text: String, transient: Bool, signalling pasteRead: PasteboardReadSignal? = nil) -> Bool {
+    mutating func write(_ text: String, transient: Bool) -> Bool {
         let expectedCount = ownedChangeCount ?? snapshot.changeCount
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !Task.isCancelled,
               pasteboard.changeCount == expectedCount else { return false }
         let item = NSPasteboardItem()
-        if let pasteRead {
-            guard item.setDataProvider(pasteRead, forTypes: [.string]) else { return false }
-        } else {
-            guard item.setString(text, forType: .string) else { return false }
-        }
+        guard item.setString(text, forType: .string) else { return false }
         if transient {
             item.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
         }
@@ -281,29 +262,5 @@ private struct DeliveryClipboardLease {
 
     func restore() {
         if let ownedChangeCount { snapshot.restore(on: pasteboard, onlyIfUnchangedSince: ownedChangeCount) }
-    }
-}
-
-/// Supplies a staged paste on demand and records whether it was read after
-/// the paste was sent. Earlier reads, such as clipboard managers, are ignored.
-/// AppKit may request the data on any thread, so state is lock-protected.
-final class PasteboardReadSignal: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
-    private let text: String
-    private let lock = NSLock()
-    private var armed = false
-    private var read = false
-
-    init(text: String) {
-        self.text = text
-    }
-
-    var wasRead: Bool { lock.withLock { read } }
-
-    func arm() { lock.withLock { armed = true } }
-
-    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem,
-                    provideDataForType type: NSPasteboard.PasteboardType) {
-        item.setString(text, forType: type)
-        lock.withLock { if armed { read = true } }
     }
 }
