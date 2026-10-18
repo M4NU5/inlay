@@ -1,0 +1,4 @@
+# The client only runs on Windows. Checks and builds default to the MSVC target,
+# so `cargo check` and `cargo xwin build` work from Linux/WSL without extra flags.
+[build]
+target = "x86_64-pc-windows-msvc"
