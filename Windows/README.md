@@ -13,7 +13,7 @@ It is a small Rust program: raw Win32 for the tray, settings window, keyboard ho
 Details:
 
 - A hold must last about 0.2 seconds before recording starts, so shortcuts that use the key never open the microphone.
-- Pressing any other key while holding cancels the take.
+- Pressing another key while holding cancels the take. Keys you were already holding, such as a movement key in a game, don't count.
 - Takes shorter than 0.25 seconds are discarded. Takes stop at the server's 3-minute limit.
 - You can start a new take while earlier ones are still transcribing. Pastes happen in release order, and never while the key is held.
 - If the text doesn't appear, open the tray menu and choose **Copy last transcript**, then paste it yourself.
@@ -105,6 +105,7 @@ The flow matches the Mac client and [`docs/client-server-contract.md`](../docs/c
 ## Troubleshooting
 
 - Read `%APPDATA%\Inlay\inlay.log`.
+- If every take ends with "No speech detected", check that the microphone isn't muted. While Inlay records, hovering over the microphone icon in the taskbar shows "Microphone: Muted" if it is.
 - `inlay.exe --paste "some text"` waits two seconds, then pastes the text into the focused window. It uses the same clipboard save, Ctrl+V and restore as a take, which helps you check one app at a time.
 
 ## Uninstall

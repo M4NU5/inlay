@@ -126,12 +126,14 @@ pub const INJECTED_MARKER: usize = 0x494E_4C41;
 pub enum Edge {
     Pressed,
     Released,
-    /// Another key went down while the hold key was held: a shortcut, not dictation.
+    /// Another key was newly pressed while the hold key was held: a shortcut, not dictation.
     OtherKey,
 }
 
 static VK: AtomicU16 = AtomicU16::new(VK_RCONTROL);
 static HELD: AtomicBool = AtomicBool::new(false);
+/// Which keys the hook has seen go down and not yet come up.
+static DOWN: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
 static SINK: OnceLock<Sender<Event>> = OnceLock::new();
 
 pub fn set_key(vk: VIRTUAL_KEY) {
@@ -198,21 +200,36 @@ unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRE
 fn observe(message: u32, event: &KBDLLHOOKSTRUCT) {
     let down = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
     let up = matches!(message, WM_KEYUP | WM_SYSKEYUP);
-    let edge = if sided(event) == VK.load(Ordering::SeqCst) {
+    let vk = sided(event);
+    let slot = &DOWN[usize::from(vk & 0xFF)];
+    let fresh = down && !slot.swap(true, Ordering::SeqCst);
+    if up {
+        slot.store(false, Ordering::SeqCst);
+    }
+    let edge = if vk == VK.load(Ordering::SeqCst) {
         if down && !HELD.swap(true, Ordering::SeqCst) {
+            refresh_down_keys();
             Some(Edge::Pressed)
         } else if up && HELD.swap(false, Ordering::SeqCst) {
             Some(Edge::Released)
         } else {
             None // Auto-repeat while held.
         }
-    } else if down && HELD.load(Ordering::SeqCst) {
+    } else if fresh && HELD.load(Ordering::SeqCst) {
         Some(Edge::OtherKey)
     } else {
         None
     };
     if let (Some(edge), Some(sink)) = (edge, SINK.get()) {
         let _ = sink.send(Event::Hotkey(edge));
+    }
+}
+
+/// Keys already down when a hold starts, such as a movement key in a game or
+/// a stuck key, keep auto-repeating. Their repeats are not a new shortcut.
+fn refresh_down_keys() {
+    for (vk, slot) in DOWN.iter().enumerate().skip(1) {
+        slot.store(is_down(vk as VIRTUAL_KEY), Ordering::SeqCst);
     }
 }
 
