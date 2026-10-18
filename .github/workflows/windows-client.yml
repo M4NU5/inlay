@@ -1,0 +1,39 @@
+name: Windows client
+
+on:
+  push:
+    branches: [main]
+    paths: ["Windows/**", ".github/workflows/windows-client.yml"]
+  pull_request:
+    paths: ["Windows/**", ".github/workflows/windows-client.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows client build
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: Windows
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Update Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add clippy rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --release -- -D warnings
+      - run: cargo build --locked --release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: inlay-windows-x64
+          path: Windows/target/x86_64-pc-windows-msvc/release/inlay.exe
+          if-no-files-found: error

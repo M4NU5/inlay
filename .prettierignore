@@ -2,6 +2,7 @@ vendor/
 node_modules/
 .build/
 build/
+Windows/target/
 .local/
 bun.lock
 Package.resolved
