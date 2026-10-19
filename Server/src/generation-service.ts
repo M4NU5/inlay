@@ -468,9 +468,7 @@ export class GenerationService {
     if (this.stopping || this.timer) return;
     this.beginWarmup();
     this.lastRetentionSweep = Date.now();
-    void this.mutate(() => this.sweepAudioRetention()).catch((error) =>
-      logError("retention_sweep_failed", error),
-    );
+    void this.sweepAudioRetention().catch((error) => logError("retention_sweep_failed", error));
     this.timer = setInterval(() => {
       void this.tick().catch((error) => logError("tick_failed", error));
     }, 2000);
@@ -501,7 +499,7 @@ export class GenerationService {
     }
     if (Date.now() - this.lastRetentionSweep >= 86_400_000) {
       this.lastRetentionSweep = Date.now();
-      await this.mutate(() => this.sweepAudioRetention());
+      await this.sweepAudioRetention();
     }
   }
   async shutdown() {
@@ -615,15 +613,13 @@ export class GenerationService {
           "device_mismatch",
           "A device may only renew its own credential.",
         );
-      if (
-        actor.kind === "admin" &&
-        this.devices.legacyEnrollmentClosed &&
-        !this.devices.find(request.device.id)
-      )
+      // Once closed, only a device's own credential renews it; the admin
+      // token can no longer mint or rotate any device credential.
+      if (actor.kind === "admin" && this.devices.legacyEnrollmentClosed)
         throw new ServiceError(
           403,
           "enrollment_closed",
-          "The admin token no longer enrolls new devices on this server.",
+          "The admin token no longer enrolls devices on this server.",
         );
       return this.devices.enroll(request.device);
     });
@@ -1253,17 +1249,41 @@ export class GenerationService {
     if (changed) await this.save(record);
     return freed;
   }
+  // Bulk purges take each record's generation lock (not the global queue) and
+  // re-check eligibility there, so reprocess, delivery, and delete never
+  // interleave with a purge.
+  private purgeAudioLocked(
+    id: string,
+    kinds: AudioKind[],
+    eligible: (record: GenerationRecord) => boolean,
+  ) {
+    return this.withGenerationLock(id, async () => {
+      const record = this.records.get(id);
+      if (!record || !terminal(record) || !eligible(record)) return 0;
+      return this.purgeAudio(record, kinds);
+    });
+  }
   private async sweepAudioRetention() {
     const days = this.preferences.preferences.audioRetentionDays;
     if (days === 0) return;
     const cutoff = Date.now() - days * 86_400_000;
-    for (const record of this.records.values()) {
-      if (!terminal(record) || Date.parse(record.createdAt) >= cutoff) continue;
-      if (!record.inferenceAudio && !record.originalAudio) continue;
+    const candidates = [...this.records.values()].filter(
+      (record) =>
+        terminal(record) &&
+        Date.parse(record.createdAt) < cutoff &&
+        (record.inferenceAudio || record.originalAudio),
+    );
+    // Re-read retention under each record's lock: a preferences save during
+    // the sweep must stop further deletion, not be outlived by a stale cutoff.
+    const expired = (record: GenerationRecord) => {
+      const current = this.preferences.preferences.audioRetentionDays;
+      return current !== 0 && Date.parse(record.createdAt) < Date.now() - current * 86_400_000;
+    };
+    for (const { id } of candidates) {
       try {
-        await this.purgeAudio(record, ["inference", "original"]);
+        await this.purgeAudioLocked(id, ["inference", "original"], expired);
       } catch (error) {
-        logWarn("retention_purge_failed", { id: record.id }, error);
+        logWarn("retention_purge_failed", { id }, error);
       }
     }
   }
@@ -1290,26 +1310,27 @@ export class GenerationService {
       audioRetentionDays: this.preferences.preferences.audioRetentionDays,
     };
   }
-  purgeAllAudio(request: PurgeAudioRequest) {
-    return this.mutate(async () => {
-      const cutoff =
-        request.olderThanDays === undefined
-          ? undefined
-          : Date.now() - request.olderThanDays * 86_400_000;
-      const kinds: AudioKind[] = request.kind ? [request.kind] : ["inference", "original"];
-      let purgedRecordCount = 0;
-      let freedByteCount = 0;
-      for (const record of this.records.values()) {
-        if (!terminal(record)) continue;
-        if (cutoff !== undefined && Date.parse(record.createdAt) >= cutoff) continue;
-        const freed = await this.purgeAudio(record, kinds);
-        if (freed > 0) {
-          purgedRecordCount++;
-          freedByteCount += freed;
-        }
+  async purgeAllAudio(request: PurgeAudioRequest) {
+    const cutoff =
+      request.olderThanDays === undefined
+        ? undefined
+        : Date.now() - request.olderThanDays * 86_400_000;
+    const kinds: AudioKind[] = request.kind ? [request.kind] : ["inference", "original"];
+    let purgedRecordCount = 0;
+    let freedByteCount = 0;
+    const olderThanCutoff = (record: GenerationRecord) =>
+      cutoff === undefined || Date.parse(record.createdAt) < cutoff;
+    // Snapshot the ids: recordings created after this purge starts are not
+    // part of it, even if they finish while it runs.
+    const ids = [...this.records.keys()];
+    for (const id of ids) {
+      const freed = await this.purgeAudioLocked(id, kinds, olderThanCutoff);
+      if (freed > 0) {
+        purgedRecordCount++;
+        freedByteCount += freed;
       }
-      return { purgedRecordCount, freedByteCount };
-    });
+    }
+    return { purgedRecordCount, freedByteCount };
   }
   deleteAudio(id: string) {
     return this.withGenerationLock(id, async () => {

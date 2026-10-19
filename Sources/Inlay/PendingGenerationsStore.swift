@@ -8,6 +8,8 @@ struct PendingGenerationEntry: Codable, Equatable {
     var endpoint: String
     var inferenceFrames: Int64
     var originalFrames: Int64?
+    /// Inference count to seal with if the server holds an unacknowledged chunk.
+    var fallbackInferenceFrames: Int64? = nil
     var isTest: Bool
     var sealedAt: Date
 }

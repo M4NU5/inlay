@@ -34,14 +34,21 @@ export function timingSafeStringEqual(expected: string, provided: string) {
   );
 }
 
+// Clients decode with whole-second ISO 8601; older stores may hold milliseconds.
+const wholeSeconds = (timestamp: string) => timestamp.replace(/\.\d+Z$/, "Z");
+
 const summary = (device: DeviceRecord): DeviceSummary => {
-  const result: DeviceSummary = { id: device.id, name: device.name, createdAt: device.createdAt };
-  if (device.lastSeenAt) result.lastSeenAt = device.lastSeenAt;
-  if (device.revokedAt) result.revokedAt = device.revokedAt;
+  const result: DeviceSummary = {
+    id: device.id,
+    name: device.name,
+    createdAt: wholeSeconds(device.createdAt),
+  };
+  if (device.lastSeenAt) result.lastSeenAt = wholeSeconds(device.lastSeenAt);
+  if (device.revokedAt) result.revokedAt = wholeSeconds(device.revokedAt);
   return result;
 };
 
-const now = () => new Date().toISOString();
+const now = () => wholeSeconds(new Date().toISOString());
 
 function isValidStore(value: unknown): value is DeviceStoreFile {
   if (typeof value !== "object" || value === null) return false;
@@ -62,11 +69,13 @@ function isValidStore(value: unknown): value is DeviceStoreFile {
   );
 }
 
-/// Per-device credentials. Only token hashes are stored; writes serialize
-/// through the owning service's global queue.
+/// Per-device credentials. Only token hashes are stored. Writes chain in
+/// call order and each serializes the state current when it runs, so a late
+/// write never restores an older snapshot.
 export class DeviceStore {
   private file: DeviceStoreFile = { version: 1, legacyEnrollmentClosed: false, devices: [] };
   private readonly path: string;
+  private writes = Promise.resolve();
 
   private constructor(dataDirectory: string) {
     this.path = join(dataDirectory, "devices.json");
@@ -119,13 +128,14 @@ export class DeviceStore {
 
   async enroll(identity: DeviceIdentity) {
     const existing = this.find(identity.id);
+    if (existing?.revokedAt)
+      throw new ServiceError(403, "device_revoked", "This device was revoked on this server.");
     if (!existing && this.file.devices.length >= MAX_DEVICES)
       throw new ServiceError(413, "device_limit", "This server already has the maximum devices.");
     const token = randomBytes(32).toString("hex");
     if (existing) {
       existing.name = identity.name;
       existing.tokenHash = sha256(token);
-      delete existing.revokedAt;
       existing.lastSeenAt = now();
       await this.persist();
       return { device: summary(existing), token, created: false };
@@ -174,7 +184,9 @@ export class DeviceStore {
     await this.persist();
   }
 
-  private async persist() {
-    await atomicPrivateWrite(this.path, JSON.stringify(this.file));
+  private persist() {
+    const write = this.writes.then(() => atomicPrivateWrite(this.path, JSON.stringify(this.file)));
+    this.writes = write.catch(() => {});
+    return write;
   }
 }

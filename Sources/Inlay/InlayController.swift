@@ -645,13 +645,27 @@ final class InlayController: ObservableObject {
         refreshHistory()
     }
 
-    private func addPendingEntry(id: UUID, finish: FinishGenerationRequest, isTest: Bool) {
+    private func addPendingEntry(id: UUID, finish: FinishGenerationRequest,
+                                 fallback: FinishGenerationRequest?, isTest: Bool) {
         pendingEntries.removeAll { $0.id == id }
         pendingEntries.append(PendingGenerationEntry(
             id: id, endpoint: preferences.endpoint,
             inferenceFrames: finish.inferenceFrames, originalFrames: finish.originalFrames,
-            isTest: isTest, sealedAt: Date()))
+            fallbackInferenceFrames: fallback?.inferenceFrames, isTest: isTest, sealedAt: Date()))
         pendingStore.save(pendingEntries)
+    }
+
+    /// A lost upload acknowledgement leaves the server one chunk ahead of this
+    /// Mac's count, which `finish` rejects as incomplete. Seal with the
+    /// unacknowledged count instead of cancelling speech the server holds.
+    private static func seal(_ connection: ServerClient, id: UUID, finish: FinishGenerationRequest,
+                             fallback: FinishGenerationRequest?) async throws -> GenerationRecord {
+        do { return try await connection.finish(id, value: finish) }
+        catch {
+            guard let fallback, let clientError = error as? ServerClientError,
+                  case .rejected(409, _, "incomplete_audio") = clientError else { throw error }
+            return try await connection.finish(id, value: fallback)
+        }
     }
 
     private func removePendingEntry(_ id: UUID) {
@@ -683,8 +697,9 @@ final class InlayController: ObservableObject {
                 removePendingEntry(entry.id)
             case .receiving:
                 do {
-                    _ = try await connection.finish(entry.id, value: FinishGenerationRequest(
-                        inferenceFrames: entry.inferenceFrames, originalFrames: entry.originalFrames))
+                    _ = try await Self.seal(connection, id: entry.id, finish: FinishGenerationRequest(
+                        inferenceFrames: entry.inferenceFrames, originalFrames: entry.originalFrames),
+                        fallback: entry.fallbackInferenceFrames.map { .init(inferenceFrames: $0, originalFrames: nil) })
                 } catch let ServerClientError.rejected(status, _, _) where (400..<500).contains(status) && ![408, 429].contains(status) {
                     removePendingEntry(entry.id)
                 } catch {}
@@ -962,8 +977,16 @@ final class InlayController: ObservableObject {
                 pending.pipe.finish()
                 let uploadOutcome = try await pending.upload.value
                 var finish = uploadOutcome.finish
-                if !uploadOutcome.complete, finish.inferenceFrames < 4_000 {
+                var fallback = uploadOutcome.fallback
+                let truncated = !uploadOutcome.complete && !test
+                if !uploadOutcome.complete, max(finish.inferenceFrames, fallback?.inferenceFrames ?? 0) < 4_000 {
                     throw ServerClientError.rejected(422, "The interrupted recording was too short to save.", "")
+                }
+                if truncated {
+                    // Released, but the upload stopped early: only a prefix exists.
+                    // Like a salvaged take, it is copied and never auto-inserted.
+                    pending.target = (.clipboard, nil)
+                    if sessionID == current { statusMessage = "Saving interrupted recording…" }
                 }
                 try Task.checkCancellation()
                 stoppedAudio?.cleanup()
@@ -980,11 +1003,12 @@ final class InlayController: ObservableObject {
                 let sharesEarlierAnchor = pendingDictations.prefix { $0 !== pending }
                     .contains { earlier in earlier.target.map { $0.anchor == anchor } ?? true }
                 finish.continuationID = sharesEarlierAnchor ? nil : anchor.flatMap { self.continuation(for: $0)?.generationID }
+                fallback?.continuationID = finish.continuationID
                 try Task.checkCancellation()
                 pending.sealed = true // The server may accept a seal whose response is interrupted.
-                addPendingEntry(id: id, finish: finish, isTest: test)
+                addPendingEntry(id: id, finish: finish, fallback: fallback, isTest: test)
                 var result: GenerationRecord
-                do { result = try await connection.finish(id, value: finish) }
+                do { result = try await Self.seal(connection, id: id, finish: finish, fallback: fallback) }
                 catch let ServerClientError.rejected(status, message, code) where (400..<500).contains(status) && ![408, 429].contains(status) {
                     pending.sealed = false // The server answered without sealing, so cancel promptly.
                     throw ServerClientError.rejected(status, message, code)
@@ -1006,8 +1030,13 @@ final class InlayController: ObservableObject {
                 await waitForCaptureRelease()
                 try Task.checkCancellation()
                 let deliveryDestination = rebasedDestination(resolved)
-                let receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
+                var receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
                                             clipboardCount: clipboardCount, session: current)
+                if truncated, receipt.status == DictationDeliveryStatus.copied.rawValue {
+                    let message = "Recording was interrupted. The saved part was copied to the clipboard."
+                    receipt.message = message
+                    lastDelivery = message
+                }
                 try Task.checkCancellation()
                 do { try await connection.delivery(id, receipt: receipt) }
                 catch { continuationAnchors.removeAll { $0.generationID == id } }

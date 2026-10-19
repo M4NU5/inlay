@@ -313,10 +313,15 @@ extension ServerClient {
         var keepOriginal = preserveOriginal
         func outcome(complete: Bool) -> UploadOutcome {
             let originalFrames = complete ? original.frames : original.acknowledgedFrames
+            // The failed inference chunk may have reached the server with only its
+            // acknowledgement lost. Its original-audio interval was never sent, so
+            // that count seals without the archival copy.
+            let fallback = !complete && inference.frames > inference.acknowledgedFrames
+                ? FinishGenerationRequest(inferenceFrames: inference.frames, originalFrames: nil) : nil
             return UploadOutcome(finish: FinishGenerationRequest(
                 inferenceFrames: complete ? inference.frames : inference.acknowledgedFrames,
                 originalFrames: keepOriginal && originalFrames > 0 ? originalFrames : nil),
-                complete: complete)
+                complete: complete, fallback: fallback)
         }
         func flushOriginal() async throws {
             guard keepOriginal else { return }
@@ -391,6 +396,8 @@ extension ServerClient {
 struct UploadOutcome: Sendable {
     let finish: FinishGenerationRequest
     let complete: Bool
+    /// Seal counts to try when `finish` is rejected as incomplete audio.
+    let fallback: FinishGenerationRequest?
 }
 
 private struct UploadBuffer {

@@ -140,7 +140,7 @@ The dev runner fixes its host to loopback and defaults to port 8391, `.local/ser
 
 The token file holds the **admin token** (at least 32 characters, no internal whitespace). Without `--token-file`, the server creates one at `<data-dir>/admin-token` on first start and logs its path. In the Mac app, enter the endpoint and admin token once under **This Mac**; the Mac immediately enrolls itself and keeps its own revocable per-device credential in Keychain. The admin token itself only enrolls, lists, and revokes devices — it cannot dictate or read history.
 
-- Revoke a Mac from **This Mac** in the app, or with the admin token (`DELETE /v1/devices/<id>`). Once every Mac has enrolled, use **Stop accepting it** so the admin token can no longer enroll new devices.
+- Revoke a Mac from **This Mac** in the app, or with the admin token (`DELETE /v1/devices/<id>`). Once every Mac has enrolled, use **Stop accepting it** so the admin token can no longer enroll or rotate any device credential. A revoked device ID stays revoked.
 - Lost Mac: revoke its device; if it may still hold the old shared/admin token, also rotate the admin token file on the server host (stop server, replace file contents, start). Device credentials are unaffected.
 - Lost admin token: with server filesystem access, replace the token file contents and restart; enrolled devices keep working. If `devices.json` in the data directory is lost or corrupt, delete it and restart — every Mac re-enrolls with the admin token and history is untouched.
 - Backups of the data directory include `devices.json` (hashes only) and, when auto-created, the admin token itself. Downgrading to a pre-v3 server reverts this auth model.

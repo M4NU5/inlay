@@ -153,13 +153,19 @@ final class LocalServerManager: ObservableObject {
                 createdToken = true
             }
             state = .installing("Installing background service")
+            // Placeholders sit in plist <string> text, so values are XML-escaped.
+            func xml(_ value: String) -> String {
+                value.replacingOccurrences(of: "&", with: "&amp;")
+                    .replacingOccurrences(of: "<", with: "&lt;")
+                    .replacingOccurrences(of: ">", with: "&gt;")
+            }
             let rendered = template
-                .replacingOccurrences(of: "__LABEL__", with: paths.label)
-                .replacingOccurrences(of: "__SERVER_DIR__", with: serverDirectory.path)
-                .replacingOccurrences(of: "__DATA_DIR__", with: paths.dataDirectory.path)
-                .replacingOccurrences(of: "__MODELS_DIR__", with: paths.modelsDirectory.path)
-                .replacingOccurrences(of: "__TOKEN_FILE__", with: paths.tokenFile.path)
-                .replacingOccurrences(of: "__LOG_DIR__", with: paths.logsDirectory.path)
+                .replacingOccurrences(of: "__LABEL__", with: xml(paths.label))
+                .replacingOccurrences(of: "__SERVER_DIR__", with: xml(serverDirectory.path))
+                .replacingOccurrences(of: "__DATA_DIR__", with: xml(paths.dataDirectory.path))
+                .replacingOccurrences(of: "__MODELS_DIR__", with: xml(paths.modelsDirectory.path))
+                .replacingOccurrences(of: "__TOKEN_FILE__", with: xml(paths.tokenFile.path))
+                .replacingOccurrences(of: "__LOG_DIR__", with: xml(paths.logsDirectory.path))
             try fileManager.createDirectory(at: paths.plistURL.deletingLastPathComponent(),
                                             withIntermediateDirectories: true)
             try rendered.write(to: paths.plistURL, atomically: true, encoding: .utf8)
