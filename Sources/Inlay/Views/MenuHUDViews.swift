@@ -251,7 +251,7 @@ struct DictationHUD: View {
                 .foregroundStyle(InlayPalette.muted)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            if !controller.lastTranscript.isEmpty {
+            if result != .copied, !controller.lastTranscript.isEmpty {
                 Button {
                     controller.copyLastTranscript()
                     if controller.lastDeliveryStatus == .copied { controller.dismissFeedback() }
@@ -265,15 +265,17 @@ struct DictationHUD: View {
                 .accessibilityLabel("Copy again")
                 .accessibilityIdentifier("hud.copy-again")
             }
-            Button { controller.dismissFeedback() } label: {
-                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
-                    .frame(width: 22, height: 28)
-                    .contentShape(Rectangle())
+            if result != .copied {
+                Button { controller.dismissFeedback() } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                        .frame(width: 22, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss")
+                .accessibilityLabel("Dismiss")
+                .accessibilityIdentifier("hud.dismiss")
             }
-            .buttonStyle(.plain)
-            .help("Dismiss")
-            .accessibilityLabel("Dismiss")
-            .accessibilityIdentifier("hud.dismiss")
         }
     }
 

@@ -27,7 +27,7 @@ Use your own model paths if they are already installed. The script builds the se
 2. Wait for the server to be ready. Focus a text field, hold **Right Option**, speak, and release.
 3. Change the shortcut under **This Mac**, choose inputs under **Microphone**, and edit shared cleanup instructions or dictionary entries under **Server preferences**.
 
-**Test microphone** shows a result in Inlay without inserting it. Fn/Globe is also supported; set macOS **Keyboard → Press Globe key to → Do Nothing** if its system action conflicts.
+**Test microphone** shows a result in Inlay without inserting it. The regular app defaults to Fn/Globe; set macOS **Keyboard → Press Globe key to → Do Nothing** if its system action conflicts.
 
 ## Use a server on another machine
 

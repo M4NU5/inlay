@@ -223,7 +223,7 @@ extension ServerClient {
         let filename = "\(kind.rawValue).wav"
         let (temporary, response) = try await session.download(for: request(path: "v1/generations/\(id)/artifacts/\(filename)"))
         try Self.validate(response)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Inlay-remote-preview", isDirectory: true)
+        let directory = InlayTemporaryDirectory.url.appendingPathComponent("Inlay-remote-preview", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let destination = directory.appendingPathComponent("\(id)-\(filename)")
         try? FileManager.default.removeItem(at: destination)

@@ -12,9 +12,10 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public var customTriggerKeyCode: Int?
     public var microphones: MicrophonePreferences
 
+    public static var defaultHoldKey: String { InlayBuild.current.isDevelopment ? "rightOption" : "fn" }
     public static let `default` = InlayConfiguration()
 
-    public init(holdKey: String = "rightOption", activationMode: String = "hold", launchAtLogin: Bool = false,
+    public init(holdKey: String = InlayConfiguration.defaultHoldKey, activationMode: String = "hold", launchAtLogin: Bool = false,
                 muteOutputWhileRecording: Bool = false, dictationSoundsEnabled: Bool = true,
                 customTriggerKeyCode: Int? = nil,
                 microphones: MicrophonePreferences = MicrophonePreferences()) {
@@ -38,7 +39,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
         guard version == 1 else {
             throw values.invalid(.schemaVersion, "Only schemaVersion 1 is supported.")
         }
-        let holdKey = try values.value(String.self, for: .holdKey, default: "rightOption")
+        let holdKey = try values.value(String.self, for: .holdKey, default: Self.defaultHoldKey)
         guard ["rightOption", "rightControl", "fn", "leftOption", "leftControl"].contains(holdKey) else {
             throw values.invalid(.holdKey, "Use rightOption, rightControl, fn, leftOption, or leftControl.")
         }

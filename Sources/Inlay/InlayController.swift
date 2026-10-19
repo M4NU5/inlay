@@ -247,7 +247,7 @@ final class InlayController: ObservableObject {
         refreshPermissions()
         // Capture files are temporary only; server history is never examined here.
         CapturedAudio.cleanupOrphans()
-        try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("Inlay-remote-preview"))
+        try? FileManager.default.removeItem(at: InlayTemporaryDirectory.url.appendingPathComponent("Inlay-remote-preview"))
         hasInitialized = true
         updateLoginItem()
         refreshServer()
@@ -752,7 +752,7 @@ final class InlayController: ObservableObject {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         if let lockObserver { DistributedNotificationCenter.default().removeObserver(lockObserver) }
-        try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("Inlay-remote-preview"))
+        try? FileManager.default.removeItem(at: InlayTemporaryDirectory.url.appendingPathComponent("Inlay-remote-preview"))
     }
 
     private func bindServices() {
@@ -1011,8 +1011,10 @@ final class InlayController: ObservableObject {
                 if sessionID == current {
                     hudProgressText = nil
                     activity = delivered == .failed ? .failed : .success
-                    if delivered.needsAttention { attentionPresented = true }
-                    else { dismissHUDAfter(seconds: 1.7) }
+                    if delivered.needsAttention {
+                        attentionPresented = true
+                        if delivered == .copied { dismissHUDAfter(seconds: 2, clearAttention: true) }
+                    } else { dismissHUDAfter(seconds: 1.7) }
                     let outcomeSound: OutcomeFeedback.Sound =
                         switch delivered {
                         case .inserted, .tested, .listUpdated: .success
@@ -1210,11 +1212,12 @@ final class InlayController: ObservableObject {
         dismissHUDAfter(seconds: 4)
     }
 
-    private func dismissHUDAfter(seconds: Double) {
+    private func dismissHUDAfter(seconds: Double, clearAttention: Bool = false) {
         hudTask?.cancel()
         hudTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
             guard let self, !activity.isBusy else { return }
+            if clearAttention { attentionPresented = false }
             // A newer take's result was shown; return the HUD to earlier work.
             if let earlier = pendingDictations.last { showEarlierDictation(earlier); return }
             onHUDVisibility?(false)

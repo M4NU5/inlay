@@ -31,6 +31,7 @@ open --env "INLAY_CLIENT_DATA_DIR=$PWD/.local/dev-client" "build/Inlay Dev.app"
 ```
 
 - Under **This Mac**, select `http://localhost:8392` and the development server's token. For a server on another machine, the client requires HTTPS for remote hostnames; on the connected tailnet, a literal Tailscale IP may use HTTP.
+- With `INLAY_CLIENT_DATA_DIR` set, Inlay Dev keeps temporary recordings and previews under that directory too, separate from other running Inlay apps.
 - Grant **Inlay Dev** Microphone and Accessibility permissions. Use **Test microphone** for an in-app transcript; use the recording shortcut in a separate editable app to verify insertion.
 - `./scripts/run-dev.sh` remains available to build/start the packaged server and Mac client together. It uses port 8391 by default; choose an unused `INLAY_SERVER_PORT` and a separate archive before using it alongside an existing installation. Do not stop or restart an existing server without authorization.
 

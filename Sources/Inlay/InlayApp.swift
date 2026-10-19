@@ -329,14 +329,30 @@ private final class DictationPanel: NSPanel {
 
     func dismiss() {
         compactTask?.cancel()
-        presentation.id = nil
-        orderOut(nil)
+        let dismissedID = presentation.id
+        guard dismissedID != nil else { return }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            presentation.id = nil
+            orderOut(nil)
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, presentation.id == dismissedID else { return }
+                presentation.id = nil
+                orderOut(nil)
+            }
+        }
     }
 
     func present() {
         compact = false
         updateFrame()
         presentation.id = UUID()
+        alphaValue = 1
         updateCompactState()
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main

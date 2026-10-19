@@ -30,9 +30,8 @@ struct CapturedAudio: Sendable {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// Only this development client's generated capture names qualify.
-    /// Other Inlay builds and server archives are untouched.
-    static func cleanupOrphans(in temporaryDirectory: URL = FileManager.default.temporaryDirectory) {
+    /// Only matching capture names in the selected temporary directory qualify.
+    static func cleanupOrphans(in temporaryDirectory: URL = InlayTemporaryDirectory.url) {
         let files = FileManager.default
         guard let entries = try? files.contentsOfDirectory(at: temporaryDirectory, includingPropertiesForKeys: nil) else { return }
         for entry in entries {
@@ -385,7 +384,7 @@ final class RecordingWriter: @unchecked Sendable {
         converter.downmix = true
         converter.sampleRateConverterQuality = AVAudioQuality.high.rawValue
 
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("Inlay-Dev-recording-\(UUID().uuidString)", isDirectory: true)
+        directory = InlayTemporaryDirectory.url.appendingPathComponent("Inlay-Dev-recording-\(UUID().uuidString)", isDirectory: true)
         url = directory.appendingPathComponent("microphone.wav")
         originalURL = preserveOriginalAudio
             && OriginalAudioPolicy.isArchivable(sampleRate: inputFormat.sampleRate,
