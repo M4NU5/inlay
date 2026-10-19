@@ -76,6 +76,11 @@ final class InlayController: ObservableObject {
             if !applyingConfiguration { configuration.update { $0.dictationSoundsEnabled = dictationSoundsEnabled } }
         }
     }
+    @Published var preserveClipboard = false {
+        didSet {
+            if !applyingConfiguration { configuration.update { $0.preserveClipboard = preserveClipboard } }
+        }
+    }
     @Published var statusMessage = "Connecting to server…"
     @Published private(set) var hudProgressText: String?
     @Published private(set) var serverHealth: ServerHealth?
@@ -271,6 +276,7 @@ final class InlayController: ObservableObject {
         if muteOutputWhileRecording != settings.muteOutputWhileRecording { muteOutputWhileRecording = settings.muteOutputWhileRecording }
         if dictationSoundsEnabled != settings.dictationSoundsEnabled { dictationSoundsEnabled = settings.dictationSoundsEnabled }
         if customTriggerKeyCode != settings.customTriggerKeyCode { customTriggerKeyCode = settings.customTriggerKeyCode }
+        if preserveClipboard != settings.preserveClipboard { preserveClipboard = settings.preserveClipboard }
         applyingConfiguration = false
     }
 
@@ -1123,7 +1129,8 @@ final class InlayController: ObservableObject {
             let outcome = await inserter.deliver(record.insertionText, copying: record.finalText,
                                                   to: destination, clipboardUnchangedSince: clipboardCount,
                                                   waitUntilReady: { await self.waitForCaptureRelease() },
-                                                  isCaptureActive: { self.isHoldingCapture })
+                                                  isCaptureActive: { self.isHoldingCapture },
+                                                  preservingClipboard: preserveClipboard)
             guard !Task.isCancelled else { return DeliveryReceipt(status: "failed", message: "Delivery cancelled") }
             if let anchor { continuationAnchors.removeAll { $0.destination == anchor } }
             switch outcome {

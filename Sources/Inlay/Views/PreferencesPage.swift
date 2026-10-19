@@ -163,6 +163,8 @@ private struct DevicePreferencesForm: View {
                     .foregroundStyle(InlayPalette.muted)
                 Toggle("Play dictation sounds", isOn: $controller.dictationSoundsEnabled)
                     .accessibilityIdentifier("preferences.dictation-sounds")
+                Toggle("Never leave transcripts on the clipboard", isOn: $controller.preserveClipboard)
+                    .accessibilityIdentifier("preferences.preserve-clipboard")
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
                 if let error = controller.loginItemError {
                     Text(error).font(.caption).foregroundStyle(InlayPalette.warning)

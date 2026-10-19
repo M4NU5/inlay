@@ -13,7 +13,7 @@ Worktree: `audit/major-issues` @ `b6d6815`.
 - **Retention: cap audio.** Text kept forever; audio auto-deletes after a cap with a usage/purge screen.
 - **Cancel/failure: keep in history.** Cancelled/failed audio stays in history (explicitly overrides the report's P1-18 recommendation). Consequence: "cancel ≠ discard" becomes intended product semantics, so kept cancelled audio must be clearly labeled and deletable in the UI.
 - **Trigger: latch + menu.** Tap to start, tap to stop, plus a menu-button trigger. Hold still works.
-- **Copied: attention state.** "Copied, not inserted" stays visible with a copy-again affordance. Not a success dismissal.
+- **Copied: brief confirmation.** "Copied to clipboard" fades after two seconds; errors and unconfirmed deliveries remain actionable.
 - **Wispr import: migration bridge.** Isolate now, delete after a set window. Imported history stays readable.
 - **Swift reference server: delete it.** One server (Bun/TypeScript).
 - **Remote transport: Tailscale only.** No built-in TLS. Warn loudly on plain HTTP outside trusted networks.

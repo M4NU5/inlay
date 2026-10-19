@@ -10,6 +10,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
     public var muteOutputWhileRecording: Bool
     public var dictationSoundsEnabled: Bool
     public var customTriggerKeyCode: Int?
+    public var preserveClipboard: Bool
     public var microphones: MicrophonePreferences
 
     public static var defaultHoldKey: String { InlayBuild.current.isDevelopment ? "rightOption" : "fn" }
@@ -17,7 +18,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
 
     public init(holdKey: String = InlayConfiguration.defaultHoldKey, activationMode: String = "hold", launchAtLogin: Bool = false,
                 muteOutputWhileRecording: Bool = false, dictationSoundsEnabled: Bool = true,
-                customTriggerKeyCode: Int? = nil,
+                customTriggerKeyCode: Int? = nil, preserveClipboard: Bool = false,
                 microphones: MicrophonePreferences = MicrophonePreferences()) {
         schemaVersion = 1
         self.holdKey = holdKey
@@ -26,11 +27,13 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
         self.muteOutputWhileRecording = muteOutputWhileRecording
         self.dictationSoundsEnabled = dictationSoundsEnabled
         self.customTriggerKeyCode = customTriggerKeyCode
+        self.preserveClipboard = preserveClipboard
         self.microphones = microphones
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording, dictationSoundsEnabled, customTriggerKeyCode, microphones
+        case schemaVersion, holdKey, activationMode, launchAtLogin, muteOutputWhileRecording
+        case dictationSoundsEnabled, customTriggerKeyCode, preserveClipboard, microphones
     }
 
     public init(from decoder: Decoder) throws {
@@ -59,6 +62,7 @@ public struct InlayConfiguration: Codable, Equatable, Sendable {
                   muteOutputWhileRecording: try values.value(Bool.self, for: .muteOutputWhileRecording, default: false),
                   dictationSoundsEnabled: try values.value(Bool.self, for: .dictationSoundsEnabled, default: true),
                   customTriggerKeyCode: customTriggerKeyCode,
+                  preserveClipboard: try values.value(Bool.self, for: .preserveClipboard, default: false),
                   microphones: values.contains(.microphones)
                     ? try values.decode(StrictMicrophones.self, forKey: .microphones).preferences
                     : MicrophonePreferences())
