@@ -60,7 +60,14 @@ export function createHTTPServer(service: GenerationService) {
       );
     return actor.id;
   };
-  const app = Fastify({ logger: false, bodyLimit: 262_144 });
+  // Device IDs allow 128 graphemes, which can exceed find-my-way's default
+  // 100-unit param limit. A decoded param is never longer than its encoded
+  // path, so the 16 KiB HTTP header limit is the real bound.
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 262_144,
+    routerOptions: { maxParamLength: 16_384 },
+  });
   const parseJSON = app.getDefaultJsonParser("error", "error");
   app.removeContentTypeParser("application/json");
   app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
@@ -76,28 +83,37 @@ export function createHTTPServer(service: GenerationService) {
     const path = request.url.split("?")[0]!;
     if (path !== "/v1/liveness") {
       const remote = request.socket.remoteAddress ?? "unknown";
-      const failures = authFailures.get(remote);
-      if (failures && Date.now() - failures.windowStartedAt < 300_000 && failures.count >= 10)
-        throw new ServiceError(
-          429,
-          "auth_throttled",
-          "Too many failed sign-in attempts. Try again shortly.",
-        );
       const header = request.headers.authorization ?? "";
       const actor = service.authenticate(
         header.startsWith("Bearer ") ? header.slice(7) : undefined,
       );
-      if (actor.kind === "none") {
-        if (!failures || Date.now() - failures.windowStartedAt >= 300_000)
-          authFailures.set(remote, { count: 1, windowStartedAt: Date.now() });
-        else failures.count++;
-        throw new ServiceError(
-          401,
-          "unauthorized",
-          "Connect with this device's server credential.",
-        );
+      // Valid device credentials skip the throttle so clients sharing one
+      // address (a reverse proxy) are not locked out by another's failures.
+      if (actor.kind !== "device") {
+        const nowMs = Date.now();
+        const failures = authFailures.get(remote);
+        const windowOpen = failures !== undefined && nowMs - failures.windowStartedAt < 300_000;
+        if (windowOpen && failures.count >= 10)
+          throw new ServiceError(
+            429,
+            "auth_throttled",
+            "Too many failed sign-in attempts. Try again shortly.",
+          );
+        if (actor.kind === "none") {
+          if (windowOpen) failures.count++;
+          else {
+            for (const [key, entry] of authFailures)
+              if (nowMs - entry.windowStartedAt >= 300_000) authFailures.delete(key);
+            authFailures.set(remote, { count: 1, windowStartedAt: nowMs });
+          }
+          throw new ServiceError(
+            401,
+            "unauthorized",
+            "Connect with this device's server credential.",
+          );
+        }
+        authFailures.delete(remote);
       }
-      authFailures.delete(remote);
       actors.set(request, actor);
       if (actor.kind === "admin" && !path.startsWith("/v1/devices") && path !== "/v1/health")
         throw new ServiceError(

@@ -50,11 +50,22 @@ struct ServerClient: Sendable {
         return URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
     }()
 
-    func request(path: String, method: String = "GET", body: Data? = nil,
+    /// `segment` is appended as exactly one percent-encoded path segment, so a
+    /// caller-chosen ID containing `/`, `%`, `?`, or `#` cannot change the route.
+    func request(path: String, segment: String? = nil, method: String = "GET", body: Data? = nil,
                  contentType: String = "application/json", query: [URLQueryItem] = []) throws -> URLRequest {
         let url = endpoint.appendingPathComponent(path)
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             throw ServerClientError.invalidEndpoint
+        }
+        if let segment {
+            var allowed = CharacterSet.urlPathAllowed
+            // Encoding dots also keeps "." and ".." from becoming dot segments.
+            allowed.remove(charactersIn: "/.")
+            guard let encoded = segment.addingPercentEncoding(withAllowedCharacters: allowed) else {
+                throw ServerClientError.invalidEndpoint
+            }
+            components.percentEncodedPath += "/" + encoded
         }
         if !query.isEmpty { components.queryItems = query }
         guard let target = components.url else { throw ServerClientError.invalidEndpoint }
@@ -155,7 +166,10 @@ extension ServerClient {
         try await json(path: "v1/devices/enroll", method: "POST", body: Self.encode(EnrollDeviceRequest(device: device)))
     }
     func devices() async throws -> DeviceList { try await json(path: "v1/devices") }
-    func revokeDevice(_ id: String) async throws { try await send(path: "v1/devices/\(id)", method: "DELETE") }
+    func revokeDevice(_ id: String) async throws {
+        let (data, response) = try await session.data(for: request(path: "v1/devices", segment: id, method: "DELETE"))
+        try Self.validate(response, data: data)
+    }
     func closeLegacyEnrollment() async throws -> DeviceList {
         try await json(path: "v1/devices/close-legacy-enrollment", method: "POST")
     }

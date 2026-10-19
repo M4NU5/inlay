@@ -130,12 +130,35 @@ fi
 
 speech_model="${INLAY_SPEECH_MODEL:-}"
 proof_model="${INLAY_TEXT_MODEL:-}"
+# Defaults match scripts/setup.sh and its downloaders.
 if [[ "$(uname -s)" == Darwin ]]; then
     # Reuse model weights only. User recordings, preferences, and credentials
     # are never imported from the installed app.
-    speech_model="${speech_model:-$HOME/Library/Application Support/Inlay/Models/ggml-parakeet-tdt-0.6b-v3-f16.bin}"
-    proof_model="${proof_model:-$HOME/.inlay/models/Qwen3-4B-Instruct-2507-MLX-4bit}"
+    model_dir="${INLAY_MODEL_DIR:-$HOME/Library/Application Support/Inlay/Models}"
+    proof_name=Qwen3-4B-Instruct-2507-MLX-4bit
+    # The downloader creates the MLX directory before its verified files land,
+    # and the app rejects any folder that is not exactly the six pinned regular
+    # files, so only such a copy counts. Qwen falls back to the previous
+    # ~/.inlay/models default when only that copy is complete.
+    complete_mlx() {
+        local file
+        [[ -d "$1" && ! -L "$1" ]] || return 1
+        for file in model.safetensors config.json tokenizer.json tokenizer_config.json \
+            generation_config.json chat_template.jinja; do
+            [[ -f "$1/$file" && ! -L "$1/$file" ]] || return 1
+        done
+        [[ "$(find "$1" -mindepth 1 -maxdepth 1 -exec printf x \;)" == xxxxxx ]]
+    }
+    if [[ -z "${INLAY_MODEL_DIR:-}" ]] && ! complete_mlx "$model_dir/$proof_name" && \
+        complete_mlx "$HOME/.inlay/models/$proof_name"; then
+        proof_model="${proof_model:-$HOME/.inlay/models/$proof_name}"
+    fi
+else
+    model_dir="${INLAY_MODEL_DIR:-$project_dir/.local/models}"
+    proof_name=Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 fi
+speech_model="${speech_model:-$model_dir/ggml-parakeet-tdt-0.6b-v3-f16.bin}"
+proof_model="${proof_model:-$model_dir/$proof_name}"
 if [[ ! -f "$speech_model" || ! -e "$proof_model" ]]; then
     printf 'Set INLAY_SPEECH_MODEL and INLAY_TEXT_MODEL to installed Parakeet and Qwen weights.\n' >&2
     exit 1

@@ -101,7 +101,9 @@ if [[ -z "$signing_identity" ]]; then
     identity_count=$(printf '%s\n' "$identities" | awk 'NF {n++} END {print n+0}')
     if [[ "$identity_count" == 1 ]]; then signing_identity="$identities"; else signing_identity=-; fi
 fi
-codesign --force --sign "$signing_identity" --options runtime \
+timestamp_flag=
+if [[ "$dist" == 1 ]]; then timestamp_flag=--timestamp; fi
+codesign --force --sign "$signing_identity" --options runtime ${timestamp_flag:+"$timestamp_flag"} \
     --entitlements Resources/Inlay.entitlements --identifier "$bundle_id" "$staged_app"
 codesign --verify --deep --strict "$staged_app"
 if [[ -d "$app_path" ]]; then

@@ -935,7 +935,7 @@ export interface operations {
       query?: never;
       header?: never;
       path: {
-        id: components["schemas"]["UUID"];
+        id: string;
       };
       cookie?: never;
     };

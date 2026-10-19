@@ -65,6 +65,9 @@ import { maxInputCharacters, modelHints, processingRecord } from "./domain/corre
 const MAX_ACTIVE_GENERATIONS = 12;
 const RECEIVING_IDLE_MS = 120_000;
 const RECEIVING_TOTAL_MS = 900_000;
+// Event streams repeat the latest record on every tick unless a line went out
+// within the last half interval, so subscribers see a line at least every ~3 s.
+const HEARTBEAT_MS = 2_000;
 const terminal = (record: GenerationRecord) =>
   ["completed", "failed", "cancelled"].includes(record.status);
 const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -182,6 +185,10 @@ const validDeviceLabel = (text: string) =>
   graphemes(text) <= 128 &&
   text === text.trim() &&
   !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(text);
+// Revocation carries the ID in one URL segment, so also keep its encoded size
+// comfortably inside the router and HTTP request-line limits.
+const validDeviceID = (text: string) =>
+  validDeviceLabel(text) && text.length <= 2_048 && Buffer.byteLength(text) <= 4_096;
 interface Upload {
   format: AudioStreamFormat;
   chunks: { offset: number; count: number }[];
@@ -474,7 +481,7 @@ export class GenerationService {
     void this.sweepAudioRetention().catch((error) => logError("retention_sweep_failed", error));
     this.timer = setInterval(() => {
       void this.tick().catch((error) => logError("tick_failed", error));
-    }, 2000);
+    }, HEARTBEAT_MS);
     this.timer.unref();
   }
   private async tick() {
@@ -604,11 +611,11 @@ export class GenerationService {
   }
   enrollDevice(request: EnrollDeviceRequest, actor: RequestActor) {
     return this.mutate(async () => {
-      if (!validDeviceLabel(request.device.id) || !validDeviceLabel(request.device.name))
+      if (!validDeviceID(request.device.id) || !validDeviceLabel(request.device.name))
         throw new ServiceError(
           400,
           "invalid_device",
-          "Device ID and name must be nonempty single-line text of at most 128 characters.",
+          "Device ID and name must be nonempty single-line text within supported length limits.",
         );
       if (actor.kind === "device" && actor.id !== request.device.id)
         throw new ServiceError(
@@ -666,11 +673,11 @@ export class GenerationService {
     return this.mutate(async () => {
       if (this.stopping)
         throw new ServiceError(503, "server_stopping", "The server is shutting down.");
-      if (!validDeviceLabel(request.device.id) || !validDeviceLabel(request.device.name))
+      if (!validDeviceID(request.device.id) || !validDeviceLabel(request.device.name))
         throw new ServiceError(
           400,
           "invalid_device",
-          "Device ID and name must be nonempty single-line text of at most 128 characters.",
+          "Device ID and name must be nonempty single-line text within supported length limits.",
         );
       if (request.device.id !== actorDeviceID)
         throw new ServiceError(
@@ -1763,7 +1770,7 @@ export class GenerationService {
       watcher.lastVersion === version &&
       watcher.lastQueuePosition === decorated.queuePosition &&
       watcher.lastSentAt !== undefined &&
-      nowMs - watcher.lastSentAt < 10_000
+      nowMs - watcher.lastSentAt < HEARTBEAT_MS / 2
     )
       return;
     watcher.queue.push(decorated);

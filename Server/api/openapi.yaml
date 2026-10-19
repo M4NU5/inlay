@@ -153,7 +153,7 @@ paths:
           in: "path"
           required: true
           schema:
-            "$ref": "#/components/schemas/UUID"
+            type: "string"
   "/v1/storage":
     get:
       operationId: "getStorageUsage"

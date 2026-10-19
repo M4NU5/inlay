@@ -982,12 +982,12 @@ public enum Operations {
             /// - Remark: Generated from `#/paths/v1/devices/{id}/DELETE/path`.
             public struct Path: Sendable, Hashable {
                 /// - Remark: Generated from `#/paths/v1/devices/{id}/DELETE/path/id`.
-                public var id: Components.Schemas.Uuid
+                public var id: Swift.String
                 /// Creates a new `Path`.
                 ///
                 /// - Parameters:
                 ///   - id:
-                public init(id: Components.Schemas.Uuid) {
+                public init(id: Swift.String) {
                     self.id = id
                 }
             }
