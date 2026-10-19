@@ -103,13 +103,16 @@ final class LocalServerManager: ObservableObject {
         }
     }
 
-    private func readToken() -> String? {
-        (try? String(contentsOf: paths.tokenFile, encoding: .utf8))?
+    private func readToken(_ file: URL) -> String? {
+        (try? String(contentsOf: file, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// The admin token for the managed server, for saveConnection handoff.
-    func adminToken() -> String? { readToken() }
+    func adminToken() -> String? {
+        let dataDirectory = paths.installedMarker()?.marker.dataDirectoryURL ?? paths.dataDirectory
+        return readToken(dataDirectory.appendingPathComponent("admin-token"))
+    }
 
     func install() async {
         do {
@@ -123,8 +126,8 @@ final class LocalServerManager: ObservableObject {
 
     private func performInstall() async throws {
         guard let serverDirectory = paths.bundledServerDirectory else { throw ManagerError.noBundledServer }
-        let models = ModelDownloadManager(modelsDirectory: paths.modelsDirectory)
-        guard models.speechStatus == .installed, models.textStatus == .installed else {
+        let models = await ModelDownloadManager.verifiedStatus(modelsDirectory: paths.modelsDirectory)
+        guard models.speech == .installed, models.text == .installed else {
             throw ManagerError.modelsMissing
         }
         if await Self.portIsListening(8391) { throw ManagerError.portInUse }
@@ -133,23 +136,28 @@ final class LocalServerManager: ObservableObject {
             throw ManagerError.noBundledServer
         }
         state = .installing("Preparing folders")
+        // A reinstall keeps the existing install's data, token, and marker location.
+        let existing = paths.installedMarker()
+        let markerFile = existing?.file ?? paths.markerFile
+        let dataDirectory = existing?.marker.dataDirectoryURL ?? paths.dataDirectory
+        let tokenFile = dataDirectory.appendingPathComponent("admin-token")
         let fileManager = FileManager.default
-        let createdData = !fileManager.fileExists(atPath: paths.dataDirectory.path)
-        try fileManager.createDirectory(at: paths.dataDirectory, withIntermediateDirectories: true,
+        let createdData = !fileManager.fileExists(atPath: dataDirectory.path)
+        try fileManager.createDirectory(at: dataDirectory, withIntermediateDirectories: true,
                                         attributes: [.posixPermissions: 0o700])
         try fileManager.createDirectory(at: paths.logsDirectory, withIntermediateDirectories: true)
         var createdToken = false
         var bootstrapped = false
         do {
-            if readToken() == nil {
+            if readToken(tokenFile) == nil {
                 state = .installing("Creating server token")
                 var bytes = [UInt8](repeating: 0, count: 32)
                 guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
                     throw ManagerError.launchctlFailed("Could not generate a token.")
                 }
                 let hex = bytes.map { String(format: "%02x", $0) }.joined()
-                try hex.write(to: paths.tokenFile, atomically: true, encoding: .utf8)
-                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: paths.tokenFile.path)
+                try hex.write(to: tokenFile, atomically: true, encoding: .utf8)
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenFile.path)
                 createdToken = true
             }
             state = .installing("Installing background service")
@@ -162,9 +170,9 @@ final class LocalServerManager: ObservableObject {
             let rendered = template
                 .replacingOccurrences(of: "__LABEL__", with: xml(paths.label))
                 .replacingOccurrences(of: "__SERVER_DIR__", with: xml(serverDirectory.path))
-                .replacingOccurrences(of: "__DATA_DIR__", with: xml(paths.dataDirectory.path))
+                .replacingOccurrences(of: "__DATA_DIR__", with: xml(dataDirectory.path))
                 .replacingOccurrences(of: "__MODELS_DIR__", with: xml(paths.modelsDirectory.path))
-                .replacingOccurrences(of: "__TOKEN_FILE__", with: xml(paths.tokenFile.path))
+                .replacingOccurrences(of: "__TOKEN_FILE__", with: xml(tokenFile.path))
                 .replacingOccurrences(of: "__LOG_DIR__", with: xml(paths.logsDirectory.path))
             try fileManager.createDirectory(at: paths.plistURL.deletingLastPathComponent(),
                                             withIntermediateDirectories: true)
@@ -180,15 +188,15 @@ final class LocalServerManager: ObservableObject {
             guard await isAlive() else { throw ManagerError.healthTimeout }
             let marker = LocalServerMarker(label: paths.label, plistPath: paths.plistURL.path,
                                            serverPath: serverDirectory.path,
-                                           dataDirectory: paths.dataDirectory.path, installedAt: Date())
+                                           dataDirectory: dataDirectory.path, installedAt: Date())
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
-            try encoder.encode(marker).write(to: paths.markerFile, options: .atomic)
+            try encoder.encode(marker).write(to: markerFile, options: .atomic)
         } catch {
             if bootstrapped { try? run("/bin/launchctl", ["bootout", "gui/\(getuid())/\(paths.label)"]) }
             try? fileManager.removeItem(at: paths.plistURL)
-            if createdToken { try? fileManager.removeItem(at: paths.tokenFile) }
-            if createdData { try? fileManager.removeItem(at: paths.dataDirectory) }
+            if createdToken { try? fileManager.removeItem(at: tokenFile) }
+            if createdData { try? fileManager.removeItem(at: dataDirectory) }
             throw error
         }
     }
@@ -201,18 +209,16 @@ final class LocalServerManager: ObservableObject {
     }
 
     func uninstall() {
-        guard let data = try? Data(contentsOf: paths.markerFile) else {
-            state = .failed(ManagerError.notOwned.localizedDescription)
-            return
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let marker = try? decoder.decode(LocalServerMarker.self, from: data) else {
+        guard let (markerFile, marker) = paths.installedMarker() else {
             state = .failed(ManagerError.notOwned.localizedDescription)
             return
         }
         try? run("/bin/launchctl", ["bootout", "gui/\(getuid())/\(marker.label)"])
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: marker.plistPath))
+        // One service can leave both marker layouts behind; removing only the
+        // preferred one would make the next detect() resurrect the install.
+        try? FileManager.default.removeItem(at: markerFile)
+        try? FileManager.default.removeItem(at: paths.legacyMarkerFile)
         try? FileManager.default.removeItem(at: paths.markerFile)
         state = .notInstalled
     }

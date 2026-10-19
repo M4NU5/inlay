@@ -83,7 +83,8 @@ struct HistoryPage: View {
         }
         .padding(26)
         .onAppear { controller.refreshHistory() }
-        .onChange(of: selectedID) { _, id in controller.loadGenerationDetail(id) }
+        // Summary changes (status, updatedAt) after completion or reprocess refresh the detail too.
+        .onChange(of: selected) { _, summary in controller.loadGenerationDetail(summary?.id) }
         .onChange(of: controller.historySourceFilter) { _, _ in
             deviceID = "all"
             selectedID = nil
@@ -307,6 +308,15 @@ struct HistoryPage: View {
             .padding(.leading, 20)
             .padding(.top, 8)
             .accessibilityIdentifier("history.detail")
+            } else if controller.generationDetailFailedID == summary.id {
+                VStack(spacing: 10) {
+                    Text("This dictation could not be loaded.").foregroundStyle(InlayPalette.muted)
+                    Button("Try again") {
+                        controller.errorMessage = nil
+                        controller.loadGenerationDetail(summary.id)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ProgressView("Loading dictation…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

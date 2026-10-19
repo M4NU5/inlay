@@ -31,16 +31,37 @@ if curl -fsS http://127.0.0.1:8391/v1/liveness >/dev/null 2>&1; then
     exit 1
 fi
 
+# sed works line by line, so a newline would cut the rendered plist short.
+for value in "$server_dir" "$data_dir" "$models_dir" "$token_file" "$log_dir"; do
+    if [[ "$value" == *$'\n'* ]]; then
+        printf 'Paths cannot contain newlines: %q\n' "$value" >&2
+        exit 1
+    fi
+done
+
+# Values land in plist <string> text through a sed replacement: XML-escape
+# them, then escape the replacement's own metacharacters (\, &, and |).
+plist_value() {
+    local value=$1
+    value=${value//'&'/'&amp;'}
+    value=${value//'<'/'&lt;'}
+    value=${value//'>'/'&gt;'}
+    value=${value//'\'/'\\'}
+    value=${value//'&'/'\&'}
+    value=${value//'|'/'\|'}
+    printf '%s' "$value"
+}
+
 mkdir -p "$data_dir" "$log_dir" "$HOME/Library/LaunchAgents"
 chmod 700 "$data_dir"
 umask 077
 sed \
-    -e "s|__LABEL__|$label|g" \
-    -e "s|__SERVER_DIR__|$server_dir|g" \
-    -e "s|__DATA_DIR__|$data_dir|g" \
-    -e "s|__MODELS_DIR__|$models_dir|g" \
-    -e "s|__TOKEN_FILE__|$token_file|g" \
-    -e "s|__LOG_DIR__|$log_dir|g" \
+    -e "s|__LABEL__|$(plist_value "$label")|g" \
+    -e "s|__SERVER_DIR__|$(plist_value "$server_dir")|g" \
+    -e "s|__DATA_DIR__|$(plist_value "$data_dir")|g" \
+    -e "s|__MODELS_DIR__|$(plist_value "$models_dir")|g" \
+    -e "s|__TOKEN_FILE__|$(plist_value "$token_file")|g" \
+    -e "s|__LOG_DIR__|$(plist_value "$log_dir")|g" \
     "$project_dir/Server/dev.davis.inlay.server-agent.plist" > "$plist_path"
 
 if [[ ! -f "$token_file" ]]; then

@@ -331,25 +331,33 @@ extension ServerClient {
                 original = UploadBuffer(kind: .original)
             }
         }
-        for try await chunk in stream {
-            try Task.checkCancellation()
-            switch chunk.kind {
-            case .normalized: try inference.append(chunk)
-            case .original:
-                guard preserveOriginal else { throw ServerClientError.invalidResponse }
-                if keepOriginal,
-                   !OriginalAudioPolicy.isArchivable(sampleRate: chunk.sampleRate, channels: chunk.channels) {
-                    keepOriginal = false
+        do {
+            for try await chunk in stream {
+                try Task.checkCancellation()
+                switch chunk.kind {
+                case .normalized: try inference.append(chunk)
+                case .original:
+                    guard preserveOriginal else { throw ServerClientError.invalidResponse }
+                    if keepOriginal,
+                       !OriginalAudioPolicy.isArchivable(sampleRate: chunk.sampleRate, channels: chunk.channels) {
+                        keepOriginal = false
+                    }
+                    if keepOriginal { try original.append(chunk) }
                 }
-                if keepOriginal { try original.append(chunk) }
+                // Batch about half a second of samples, overlapping transfer with the
+                // microphone while keeping HTTP overhead and memory bounded.
+                if inference.data.count >= 32_000 {
+                    guard try await flush(&inference, to: id) else { return outcome(complete: false) }
+                    try await flushOriginal()
+                }
+                if original.data.count >= 768_000 { try await flushOriginal() }
             }
-            // Batch about half a second of samples, overlapping transfer with the
-            // microphone while keeping HTTP overhead and memory bounded.
-            if inference.data.count >= 32_000 {
-                guard try await flush(&inference, to: id) else { return outcome(complete: false) }
-                try await flushOriginal()
-            }
-            if original.data.count >= 768_000 { try await flushOriginal() }
+        } catch ServerClientError.uploadBacklog {
+            // The microphone outran a stalled connection. Keep everything
+            // captured before the overflow as an interrupted take.
+            guard try await flush(&inference, to: id) else { return outcome(complete: false) }
+            try await flushOriginal()
+            return outcome(complete: false)
         }
         guard try await flush(&inference, to: id) else { return outcome(complete: false) }
         try await flushOriginal()

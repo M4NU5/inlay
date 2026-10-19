@@ -235,6 +235,7 @@ export class GenerationService {
       getRecord: (id) => this.getInternal(id),
       publish: (record) => this.publish(record),
       requireDiskSpace: () => requireDiskSpace(configuration.dataDirectory),
+      withGenerationLock: (id, operation) => this.withGenerationLock(id, operation),
     });
   }
   static async open(configuration: ServiceConfiguration, inference: InferenceBackend) {
@@ -249,6 +250,8 @@ export class GenerationService {
   }
   // Lock ordering: never await a generation lock while holding the global
   // queue, and global-queue operations never call generation-locked methods.
+  // The import queue may take a generation lock; generation-locked code never
+  // waits on the import queue.
   private withGenerationLock<T>(id: string, operation: () => Promise<T> | T): Promise<T> {
     const key = id.toUpperCase();
     const previous = this.generationQueues.get(key) ?? Promise.resolve();
@@ -1489,7 +1492,8 @@ export class GenerationService {
     return copy(previous.continuation);
   }
   private enqueueProcessing(id: string, previous: DictationContinuation | undefined) {
-    if (!this.processingOrder.includes(id)) this.processingOrder.push(id);
+    // A reprocessed id joins the speech queue at its tail, so it moves there too.
+    this.processingOrder = [...this.processingOrder.filter((queuedID) => queuedID !== id), id];
     const enqueuedAt = performance.now();
     const controller = new AbortController();
     this.processingControllers.set(id, controller);
@@ -1501,9 +1505,11 @@ export class GenerationService {
     })().catch((error) => logError("processing_chain_failed", error, { id }));
     this.processingTasks.add(task);
     void task.finally(() => {
+      this.processingTasks.delete(task);
+      // A cancelled attempt can drain after reprocess registered a new one; leave that one alone.
+      if (this.processingControllers.get(id) !== controller) return;
       this.processingControllers.delete(id);
       this.processingOrder = this.processingOrder.filter((queuedID) => queuedID !== id);
-      this.processingTasks.delete(task);
       this.beginWarmup();
     });
   }
@@ -1638,6 +1644,7 @@ export class GenerationService {
       await this.withGenerationLock(id, async () => {
         const record = this.records.get(id);
         if (!record || terminal(record)) return;
+        if (this.processingControllers.get(id)?.signal !== signal) return;
         const failed = copy(record);
         if (this.stopping && failed.inferenceAudio) {
           failed.status = "queued";

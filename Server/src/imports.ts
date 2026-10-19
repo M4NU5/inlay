@@ -368,6 +368,7 @@ type ImportContext = {
   getRecord(id: string): GenerationRecord;
   publish(record: GenerationRecord): void;
   requireDiskSpace(): Promise<void>;
+  withGenerationLock<T>(id: string, operation: () => Promise<T>): Promise<T>;
 };
 type ImportStage = {
   request: WisprFlowImportRequest;
@@ -682,110 +683,114 @@ export class WisprFlowImports {
     );
     const sourceHash = incomingHashes["source.json"]!;
     const existingID = this.index.get(request.sourceID.toLowerCase());
-    if (existingID) {
-      const record = structuredClone(this.context.getRecord(existingID)),
-        source = record.importedSource;
-      if (!source)
-        throw new ServiceError(500, "invalid_archive", "The existing source archive is invalid.");
-      const conflicts = request.artifacts.filter(
-        (item) =>
-          item.filename !== "source.json" &&
-          source.artifactSHA256[item.filename] !== undefined &&
-          source.artifactSHA256[item.filename] !== item.sha256,
-      );
-      const sameArtifacts = request.artifacts.every((item) =>
-        item.filename === "source.json"
-          ? source.sourceSHA256 === item.sha256
-          : source.artifactSHA256[item.filename] === item.sha256 ||
-            (source.artifactSHA256[item.filename] !== undefined &&
-              source.unarchivedArtifactSHA256?.[item.filename] === item.sha256),
-      );
-      const variants = new Set(source.variantNames);
-      const sameMetadata =
-        (!request.finalText || record.finalText === request.finalText) &&
-        (!request.rawText || record.rawText === request.rawText) &&
-        (request.sourceStatus === undefined || source.sourceStatus === request.sourceStatus) &&
-        (request.durationSeconds === undefined ||
-          source.durationSeconds === request.durationSeconds) &&
-        request.variantNames.every((name) => variants.has(name));
-      const earlierDirectory = this.directory(existingID);
-      await requireRegularDirectory(earlierDirectory);
-      const oldSource = await readRegularFile(
-        join(earlierDirectory, "source.json"),
-        MAXIMUM_ARTIFACT_BYTES,
-      );
-      if (sameArtifacts && sameMetadata) {
-        const partial = sourceProvenanceIsPartial(sourceDocument(oldSource));
-        await rm(stage.directory, { recursive: true });
+    // Enrichment rewrites a live record, so it holds that record's lock against delete and purge.
+    if (existingID)
+      return this.context.withGenerationLock(existingID, async () => {
+        const record = structuredClone(this.context.getRecord(existingID)),
+          source = record.importedSource;
+        if (!source)
+          throw new ServiceError(500, "invalid_archive", "The existing source archive is invalid.");
+        const conflicts = request.artifacts.filter(
+          (item) =>
+            item.filename !== "source.json" &&
+            source.artifactSHA256[item.filename] !== undefined &&
+            source.artifactSHA256[item.filename] !== item.sha256,
+        );
+        const sameArtifacts = request.artifacts.every((item) =>
+          item.filename === "source.json"
+            ? source.sourceSHA256 === item.sha256
+            : source.artifactSHA256[item.filename] === item.sha256 ||
+              (source.artifactSHA256[item.filename] !== undefined &&
+                source.unarchivedArtifactSHA256?.[item.filename] === item.sha256),
+        );
+        const variants = new Set(source.variantNames);
+        const sameMetadata =
+          (!request.finalText || record.finalText === request.finalText) &&
+          (!request.rawText || record.rawText === request.rawText) &&
+          (request.sourceStatus === undefined || source.sourceStatus === request.sourceStatus) &&
+          (request.durationSeconds === undefined ||
+            source.durationSeconds === request.durationSeconds) &&
+          request.variantNames.every((name) => variants.has(name));
+        const earlierDirectory = this.directory(existingID);
+        await requireRegularDirectory(earlierDirectory);
+        const oldSource = await readRegularFile(
+          join(earlierDirectory, "source.json"),
+          MAXIMUM_ARTIFACT_BYTES,
+        );
+        if (sameArtifacts && sameMetadata) {
+          const partial = sourceProvenanceIsPartial(sourceDocument(oldSource));
+          await rm(stage.directory, { recursive: true });
+          this.stages.delete(id.toUpperCase());
+          const names = this.names(source.unarchivedArtifactSHA256 ?? {});
+          return {
+            outcome: names.length || partial ? "partial" : "skipped",
+            record,
+            unarchivedArtifactNames: names,
+          };
+        }
+        let nextSource =
+          source.sourceSHA256 !== sourceHash
+            ? mergedSourceJSON(
+                oldSource,
+                await readRegularFile(join(stage.directory, "source.json"), MAXIMUM_ARTIFACT_BYTES),
+              )
+            : oldSource;
+        source.sourceSHA256 = sourceHash;
+        for (const manifest of conflicts) {
+          const oldHash = source.artifactSHA256[manifest.filename]!;
+          const earlier = await readRegularFile(
+            join(earlierDirectory, manifest.filename),
+            MAXIMUM_ARTIFACT_BYTES,
+          );
+          if (sha256(earlier) !== oldHash)
+            throw new ServiceError(
+              500,
+              "invalid_archive",
+              "An archived source artifact no longer matches its metadata.",
+            );
+          await atomicPrivateWrite(join(stage.directory, manifest.filename), earlier);
+          nextSource = recordingConflict(nextSource, manifest, oldHash);
+        }
+        for (const manifest of request.artifacts)
+          if (
+            manifest.filename !== "source.json" &&
+            source.artifactSHA256[manifest.filename] === undefined
+          )
+            source.artifactSHA256[manifest.filename] = manifest.sha256;
+        const reconciliation = reconciledSourceJSON(nextSource, source.artifactSHA256);
+        source.unarchivedArtifactSHA256 = reconciliation.unarchivedHashes;
+        await atomicPrivateWrite(join(stage.directory, "source.json"), reconciliation.data);
+        source.artifactSHA256["source.json"] = sha256(reconciliation.data);
+        for (const filename of source.artifactNames)
+          if (!stage.uploaded.has(filename))
+            await readRegularFile(join(earlierDirectory, filename), MAXIMUM_ARTIFACT_BYTES);
+        for (const filename of await readdir(earlierDirectory)) {
+          if (await exists(join(stage.directory, filename))) continue;
+          await atomicPrivateWrite(
+            join(stage.directory, filename),
+            await readRegularFile(join(earlierDirectory, filename), MAXIMUM_ARTIFACT_BYTES),
+          );
+        }
+        source.sourceStatus = request.sourceStatus ?? source.sourceStatus;
+        source.durationSeconds = request.durationSeconds ?? source.durationSeconds;
+        source.variantNames = [
+          ...new Set([...source.variantNames, ...request.variantNames]),
+        ].sort();
+        source.artifactNames = this.names(source.artifactSHA256);
+        if (request.finalText) record.finalText = request.finalText;
+        if (request.rawText) record.rawText = request.rawText;
+        record.updatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+        await this.writeRecord(stage.directory, record);
+        await this.replaceDirectory(existingID, id.toUpperCase(), stage.directory);
+        this.context.publish(record);
         this.stages.delete(id.toUpperCase());
-        const names = this.names(source.unarchivedArtifactSHA256 ?? {});
+        const names = this.names(reconciliation.unarchivedHashes);
         return {
-          outcome: names.length || partial ? "partial" : "skipped",
+          outcome: names.length || reconciliation.provenancePartial ? "partial" : "enriched",
           record,
           unarchivedArtifactNames: names,
         };
-      }
-      let nextSource =
-        source.sourceSHA256 !== sourceHash
-          ? mergedSourceJSON(
-              oldSource,
-              await readRegularFile(join(stage.directory, "source.json"), MAXIMUM_ARTIFACT_BYTES),
-            )
-          : oldSource;
-      source.sourceSHA256 = sourceHash;
-      for (const manifest of conflicts) {
-        const oldHash = source.artifactSHA256[manifest.filename]!;
-        const earlier = await readRegularFile(
-          join(earlierDirectory, manifest.filename),
-          MAXIMUM_ARTIFACT_BYTES,
-        );
-        if (sha256(earlier) !== oldHash)
-          throw new ServiceError(
-            500,
-            "invalid_archive",
-            "An archived source artifact no longer matches its metadata.",
-          );
-        await atomicPrivateWrite(join(stage.directory, manifest.filename), earlier);
-        nextSource = recordingConflict(nextSource, manifest, oldHash);
-      }
-      for (const manifest of request.artifacts)
-        if (
-          manifest.filename !== "source.json" &&
-          source.artifactSHA256[manifest.filename] === undefined
-        )
-          source.artifactSHA256[manifest.filename] = manifest.sha256;
-      const reconciliation = reconciledSourceJSON(nextSource, source.artifactSHA256);
-      source.unarchivedArtifactSHA256 = reconciliation.unarchivedHashes;
-      await atomicPrivateWrite(join(stage.directory, "source.json"), reconciliation.data);
-      source.artifactSHA256["source.json"] = sha256(reconciliation.data);
-      for (const filename of source.artifactNames)
-        if (!stage.uploaded.has(filename))
-          await readRegularFile(join(earlierDirectory, filename), MAXIMUM_ARTIFACT_BYTES);
-      for (const filename of await readdir(earlierDirectory)) {
-        if (await exists(join(stage.directory, filename))) continue;
-        await atomicPrivateWrite(
-          join(stage.directory, filename),
-          await readRegularFile(join(earlierDirectory, filename), MAXIMUM_ARTIFACT_BYTES),
-        );
-      }
-      source.sourceStatus = request.sourceStatus ?? source.sourceStatus;
-      source.durationSeconds = request.durationSeconds ?? source.durationSeconds;
-      source.variantNames = [...new Set([...source.variantNames, ...request.variantNames])].sort();
-      source.artifactNames = this.names(source.artifactSHA256);
-      if (request.finalText) record.finalText = request.finalText;
-      if (request.rawText) record.rawText = request.rawText;
-      record.updatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-      await this.writeRecord(stage.directory, record);
-      await this.replaceDirectory(existingID, id.toUpperCase(), stage.directory);
-      this.context.publish(record);
-      this.stages.delete(id.toUpperCase());
-      const names = this.names(reconciliation.unarchivedHashes);
-      return {
-        outcome: names.length || reconciliation.provenancePartial ? "partial" : "enriched",
-        record,
-        unarchivedArtifactNames: names,
-      };
-    }
+      });
     const recordID = randomUUID().toUpperCase(),
       now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
     const reconciliation = reconciledSourceJSON(

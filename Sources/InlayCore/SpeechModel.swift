@@ -56,6 +56,7 @@ public enum ModelIntegrity {
             defer { try? file.close() }
             var digest = SHA256()
             while let data = try file.read(upToCount: 4 * 1_024 * 1_024), !data.isEmpty {
+                if Task.isCancelled { return .failure(.unreadable("Model verification was cancelled.")) }
                 digest.update(data: data)
             }
             let actual = digest.finalize().map { String(format: "%02x", $0) }.joined()

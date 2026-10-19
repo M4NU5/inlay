@@ -93,6 +93,7 @@ final class InlayController: ObservableObject {
     let localServer = LocalServerManager()
     @Published private(set) var generations: [GenerationSummary] = []
     @Published private(set) var generationDetail: GenerationRecord?
+    @Published private(set) var generationDetailFailedID: UUID?
     private var detailTask: Task<Void, Never>?
     @Published private(set) var undeliveredResults: [GenerationRecord] = []
     @Published private(set) var devices: [DeviceSummary] = []
@@ -345,8 +346,9 @@ final class InlayController: ObservableObject {
             return
         }
         continuationAnchors.removeAll()
-        pendingEntries = []
-        undeliveredResults = []
+        // Renaming or re-entering a token for the same server keeps its pending results.
+        pendingEntries.removeAll { $0.endpoint != preferences.endpoint }
+        undeliveredResults.removeAll { result in !pendingEntries.contains { $0.id == result.id } }
         pendingStore.save(pendingEntries)
         serverHealth = nil
         sharedPreferences = nil
@@ -418,9 +420,12 @@ final class InlayController: ObservableObject {
 
     private func enrollThisDevice() async -> Bool {
         guard let connection = try? client() else { return false }
+        let endpoint = preferences.endpoint
         do {
             let response = try await connection.enroll(
                 device: DeviceIdentity(id: preferences.deviceID, name: preferences.deviceName))
+            // A connection change mid-enroll must not store the old server's token under the new one.
+            guard endpoint == preferences.endpoint else { return false }
             return preferences.replaceToken(response.token)
         } catch { return false }
     }
@@ -472,6 +477,8 @@ final class InlayController: ObservableObject {
             guard let self else { return }
             do {
                 _ = try await client().purgeAudio(PurgeAudioRequest(kind: kind))
+                // Purges leave summaries unchanged, so the open detail reloads here.
+                if let id = generationDetail?.id { loadGenerationDetail(id) }
                 await refreshStorageUsage()
                 refreshHistory()
             } catch { errorMessage = error.localizedDescription }
@@ -509,9 +516,11 @@ final class InlayController: ObservableObject {
     }
 
     /// Loads the full record for the history detail pane (summaries stay in the list).
+    /// Reloading the shown record keeps it on screen until the fresh copy arrives.
     func loadGenerationDetail(_ id: UUID?) {
         detailTask?.cancel()
-        generationDetail = nil
+        if generationDetail?.id != id { generationDetail = nil }
+        generationDetailFailedID = nil
         guard let id else { return }
         detailTask = Task { [weak self] in
             guard let self else { return }
@@ -520,7 +529,11 @@ final class InlayController: ObservableObject {
                 guard !Task.isCancelled else { return }
                 generationDetail = record
             } catch is CancellationError {
-            } catch { if !Task.isCancelled { errorMessage = error.localizedDescription } }
+            } catch {
+                guard !Task.isCancelled else { return }
+                errorMessage = error.localizedDescription
+                generationDetailFailedID = id
+            }
         }
     }
 
@@ -684,8 +697,15 @@ final class InlayController: ObservableObject {
         let stale = pendingEntries.filter { $0.sealedAt < cutoff }
         for entry in stale { removePendingEntry(entry.id) }
         guard let connection = try? client() else { return }
-        for entry in pendingEntries where entry.endpoint == preferences.endpoint {
-            guard let record = try? await connection.generation(entry.id) else { continue }
+        // Takes this session still owns deliver themselves; never offer them for copy.
+        func isLive(_ id: UUID) -> Bool { pendingDictations.contains { $0.id == id } }
+        // A connection change during the read drops or re-scopes entries; skip those.
+        func isCurrent(_ entry: PendingGenerationEntry) -> Bool {
+            entry.endpoint == preferences.endpoint && pendingEntries.contains { $0.id == entry.id }
+        }
+        for entry in pendingEntries where isCurrent(entry) && !isLive(entry.id) {
+            guard let record = try? await connection.generation(entry.id),
+                  isCurrent(entry), !isLive(entry.id) else { continue }
             switch record.status {
             case .completed:
                 if record.delivery == nil {
@@ -700,8 +720,10 @@ final class InlayController: ObservableObject {
                     _ = try await Self.seal(connection, id: entry.id, finish: FinishGenerationRequest(
                         inferenceFrames: entry.inferenceFrames, originalFrames: entry.originalFrames),
                         fallback: entry.fallbackInferenceFrames.map { .init(inferenceFrames: $0, originalFrames: nil) })
-                } catch let ServerClientError.rejected(status, _, _) where (400..<500).contains(status) && ![408, 429].contains(status) {
-                    removePendingEntry(entry.id)
+                } catch let ServerClientError.rejected(status, _, _) where (400..<500).contains(status) && ![401, 403, 408, 429].contains(status) {
+                    // Auth failures may come from a credential the user has just
+                    // replaced; they do not prove the speech is unrecoverable.
+                    if isCurrent(entry) { removePendingEntry(entry.id) }
                 } catch {}
             case .queued, .transcribing, .proofreading:
                 break
@@ -857,11 +879,12 @@ final class InlayController: ObservableObject {
                 activeGenerationID = created.id
                 activeClient = connection
                 sharedPreferences = created.settings
+                // A backlog stops capture; the upload seals what reached the server.
                 let pipe = AudioChunkPipe { [weak self] error in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         if sessionID == current, isCapturing {
-                            failSession(error.localizedDescription, cancelServer: true)
+                            salvageDictation(reason: error.localizedDescription)
                         }
                     }
                 }
