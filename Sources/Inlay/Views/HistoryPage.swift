@@ -162,7 +162,8 @@ struct HistoryPage: View {
 
     @ViewBuilder private var detail: some View {
         if let summary = selected {
-            if let selected = controller.generationDetail, selected.id == summary.id {
+            if let selected = controller.generationDetail, selected.id == summary.id,
+               controller.generationDetailFailedID != summary.id {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text(selected.createdAt, format: .dateTime.month(.wide).day().hour().minute()).font(.headline)

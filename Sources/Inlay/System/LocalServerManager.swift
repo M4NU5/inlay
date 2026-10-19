@@ -50,6 +50,9 @@ final class LocalServerManager: ObservableObject {
     }
 
     func detect() async {
+        // A view appearing mid-install must not reset the claimed state and
+        // re-enable the install button underneath the running attempt.
+        if case .installing = state { return }
         if paths.installedMarkerExists {
             state = .installed
             portOccupiedByOther = false
@@ -115,6 +118,10 @@ final class LocalServerManager: ObservableObject {
     }
 
     func install() async {
+        // Claim the installing state before the first await (model checks can
+        // take minutes) so a second click cannot run a competing install.
+        if case .installing = state { return }
+        state = .installing("Checking models")
         do {
             try await performInstall()
             state = .installed
