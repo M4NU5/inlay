@@ -4,12 +4,19 @@ use crate::api::{API_VERSION, Api};
 use crate::config::Config;
 use crate::controller::Event;
 use crate::{hotkey, paste, tray};
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 static SHARED: OnceLock<Arc<App>> = OnceLock::new();
+
+thread_local! {
+    /// The last notice raised on this thread. Each take runs on its own
+    /// thread, so a test's failure reason can't be mixed up with another take's.
+    static LAST_NOTICE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
 
 /// Makes the app reachable from Win32 window procedures, which take no context.
 pub fn install(app: Arc<App>) {
@@ -188,6 +195,7 @@ impl App {
     }
 
     fn notice(&self, text: &str, error: bool, lifetime: Duration) {
+        LAST_NOTICE.with(|last| *last.borrow_mut() = Some(text.to_string()));
         let notice = Notice {
             text: text.to_string(),
             error,
@@ -280,14 +288,14 @@ impl App {
 
 impl Drop for TestTake {
     fn drop(&mut self) {
+        // Dropped on the take's own thread, so this is the test's own reason.
+        let reason = LAST_NOTICE
+            .with(|last| last.borrow_mut().take())
+            .unwrap_or_else(|| "The test stopped before it was transcribed.".into());
         let take = self.1;
         self.0.update(|status| {
             status.tests -= 1;
             if status.latest_test == take && status.test.is_none() {
-                let reason = status.notice.as_ref().map_or_else(
-                    || "The test stopped before it was transcribed.".to_string(),
-                    |notice| notice.text.clone(),
-                );
                 status.test = Some(Err(reason));
             }
         });
