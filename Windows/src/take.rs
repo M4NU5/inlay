@@ -246,7 +246,7 @@ fn upload(
 }
 
 fn process(app: &Arc<App>, released: Released) {
-    let _busy = app.processing();
+    let busy = app.processing();
     let Released {
         api,
         generation,
@@ -311,6 +311,8 @@ fn process(app: &Arc<App>, released: Released) {
         thread::sleep(Duration::from_millis(50));
     }
     let (status, message) = deliver(app, &record);
+    // The pill shows "Pasted" now, not after the receipt round trip.
+    drop(busy);
     drop(ticket);
     log!("take: {generation} delivery {status}");
     if let Err(error) = api.delivery(&generation, status, &message) {

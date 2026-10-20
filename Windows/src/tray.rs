@@ -132,6 +132,7 @@ unsafe extern "system" fn window_proc(
         WM_TIMER => {
             unsafe { KillTimer(window, NOTICE_TIMER) };
             update_icon(window);
+            menu::set_header(window, header(app::shared()));
             0
         }
         WM_NOTIFY_ERROR => {

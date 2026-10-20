@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     DT_END_ELLIPSIS, DT_LEFT, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, GetMonitorInfoW,
-    InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, MonitorFromWindow,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::WM_MOUSELEAVE;
@@ -53,6 +53,9 @@ struct Menu {
     hot: Option<usize>,
     width: i32,
     above: bool,
+    /// The window's height, and how far the list is scrolled when it is taller.
+    view: i32,
+    scroll: i32,
 }
 
 struct Layout {
@@ -93,10 +96,13 @@ pub fn show(owner: HWND, header: Option<Header>, entries: Vec<Entry>, width: i32
         hot,
         width,
         above: false,
+        view: 0,
+        scroll: 0,
     };
-    let height = layout(&state).height;
-    let (x, y, above) = place(&anchor, width, height);
+    let (x, y, above, height) = place(&anchor, width, layout(&state).height);
     state.above = above;
+    state.view = height;
+    reveal(&mut state);
     *menu() = Some(state);
 
     let class_name = wide("InlayMenu");
@@ -163,13 +169,24 @@ pub fn set_header(owner: HWND, header: Header) {
     if window.is_null() {
         return;
     }
+    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = size_of::<MONITORINFO>() as u32;
+    unsafe {
+        GetMonitorInfoW(
+            MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+            &mut info,
+        )
+    };
+    let work = info.rcWork;
     let (height, above) = {
         let mut guard = menu();
         let Some(state) = guard.as_mut().filter(|state| state.owner == owner as usize) else {
             return;
         };
         state.header = Some(header);
-        (layout(state).height, state.above)
+        state.view = layout(state).height.min(work.bottom - work.top);
+        scroll(state, 0);
+        (state.view, state.above)
     };
     unsafe {
         let mut frame = std::mem::zeroed();
@@ -178,7 +195,8 @@ pub fn set_header(owner: HWND, header: Header) {
             frame.bottom - height
         } else {
             frame.top
-        };
+        }
+        .clamp(work.top, (work.bottom - height).max(work.top));
         SetWindowPos(
             window,
             null_mut(),
@@ -203,7 +221,7 @@ fn padding(state: &Menu) -> i32 {
 fn layout(state: &Menu) -> Layout {
     let pad = padding(state);
     let (left, right) = (pad, state.width - pad);
-    let mut y = pad;
+    let mut y = pad - state.scroll;
     let mut top = RECT::default();
     let mut message = RECT::default();
     if let Some(header) = &state.header {
@@ -244,7 +262,7 @@ fn layout(state: &Menu) -> Layout {
         })
         .collect();
     Layout {
-        height: y + pad,
+        height: y + pad + state.scroll,
         top,
         message,
         rows,
@@ -252,8 +270,9 @@ fn layout(state: &Menu) -> Layout {
 }
 
 /// Where the popup goes, kept inside the work area of the anchor's monitor.
-/// Returns the position and whether it opened upwards.
-fn place(anchor: &Anchor, width: i32, height: i32) -> (i32, i32, bool) {
+/// Returns the position, whether it opened upwards, and the height, cut to
+/// fit the work area.
+fn place(anchor: &Anchor, width: i32, height: i32) -> (i32, i32, bool, i32) {
     let gap = px(6);
     let (point, below) = match anchor {
         Anchor::Cursor => {
@@ -273,6 +292,7 @@ fn place(anchor: &Anchor, width: i32, height: i32) -> (i32, i32, bool) {
     info.cbSize = size_of::<MONITORINFO>() as u32;
     unsafe { GetMonitorInfoW(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), &mut info) };
     let work = info.rcWork;
+    let height = height.min(work.bottom - work.top);
     let (mut x, mut y, above);
     match below {
         None => {
@@ -297,7 +317,25 @@ fn place(anchor: &Anchor, width: i32, height: i32) -> (i32, i32, bool) {
     }
     x = x.clamp(work.left, (work.right - width).max(work.left));
     y = y.clamp(work.top, (work.bottom - height).max(work.top));
-    (x, y, above)
+    (x, y, above, height)
+}
+
+/// Scrolls by `by` pixels, within the list.
+fn scroll(state: &mut Menu, by: i32) {
+    let most = (layout(state).height - state.view).max(0);
+    state.scroll = (state.scroll + by).clamp(0, most);
+}
+
+/// Scrolls the highlighted item into view.
+fn reveal(state: &mut Menu) {
+    let Some(hot) = state.hot else { return };
+    let row = layout(state).rows[hot];
+    let pad = padding(state);
+    if row.top < pad {
+        scroll(state, row.top - pad);
+    } else if row.bottom > state.view - pad {
+        scroll(state, row.bottom - (state.view - pad));
+    }
 }
 
 fn paint(window: HWND) {
@@ -522,7 +560,16 @@ unsafe extern "system" fn window_proc(
             unsafe { InvalidateRect(window, null(), 0) };
             0
         }
-        WM_LBUTTONUP => {
+        WM_MOUSEWHEEL => {
+            let notches = ((wparam >> 16) & 0xFFFF) as i16 as i32;
+            if let Some(state) = menu().as_mut() {
+                scroll(state, -notches * px(ROW) / WHEEL_DELTA as i32 * 3);
+                state.hot = None;
+            }
+            unsafe { InvalidateRect(window, null(), 0) };
+            0
+        }
+        WM_LBUTTONUP | WM_RBUTTONUP => {
             let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
             let hit = menu().as_mut().and_then(|state| {
                 state.hot = hit(state, y);
@@ -538,6 +585,7 @@ unsafe extern "system" fn window_proc(
                 VK_DOWN | VK_UP => {
                     if let Some(state) = menu().as_mut() {
                         step(state, if wparam as u16 == VK_DOWN { 1 } else { -1 });
+                        reveal(state);
                     }
                     unsafe { InvalidateRect(window, null(), 0) };
                 }
