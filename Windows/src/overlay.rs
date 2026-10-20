@@ -13,7 +13,7 @@ use std::f32::consts::{PI, TAU};
 use std::ffi::c_void;
 use std::mem::discriminant;
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
@@ -24,8 +24,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 static WINDOW: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 /// The pill's bottom centre in screen pixels, fixed while it is showing.
 static ANCHOR: Mutex<(i32, i32)> = Mutex::new((0, 0));
-/// The waveform's smoothed loudness, as `f32` bits.
-static SMOOTH: AtomicU32 = AtomicU32::new(0);
+/// The waveform's recent loudness, scrolling right to left.
+static STREAM: Mutex<Stream> = Mutex::new(Stream {
+    samples: [0.0; BARS + 1],
+    next: 0.0,
+});
 /// The animation while the pill is on screen.
 static MOTION: Mutex<Option<Motion>> = Mutex::new(None);
 
@@ -43,7 +46,10 @@ const FADE: f32 = 0.2;
 const PILL: u32 = 0x05080B;
 const ORB: u32 = 0x0E161D;
 const BORDER: u32 = 0x2E4556;
-const BARS: usize = 10;
+/// Bars in the waveform, one loudness sample each, as on the Mac.
+const BARS: usize = 9;
+/// Seconds between samples: a little slower than the Mac's twenty a second.
+const SAMPLE: f32 = 0.055;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Stage {
@@ -53,6 +59,39 @@ enum Stage {
     Recording(Instant),
     Processing,
     Pasted,
+}
+
+/// The waveform's samples, oldest first. The last one is on its way in from
+/// the right, due to land at `next`.
+#[derive(Clone, Copy)]
+struct Stream {
+    samples: [f32; BARS + 1],
+    next: f32,
+}
+
+impl Stream {
+    /// Takes a sample for each step that has passed. Only live audio counts.
+    fn advance(&mut self, now: f32, level: f32) {
+        let steps = (((now - self.next) / SAMPLE).floor() + 1.0).max(0.0) as usize;
+        for _ in 0..steps.min(BARS + 1) {
+            self.samples.rotate_left(1);
+            self.samples[BARS] = level;
+        }
+        self.next += steps as f32 * SAMPLE;
+    }
+
+    /// Silence, with the first sample due now.
+    fn clear(&mut self, now: f32) {
+        *self = Stream {
+            samples: [0.0; BARS + 1],
+            next: now,
+        };
+    }
+
+    /// How far the newest sample has moved in, 0 to 1.
+    fn slide(&self, now: f32) -> f32 {
+        (1.0 - (self.next - now) / SAMPLE).clamp(0.0, 1.0)
+    }
 }
 
 /// Where a morph started, and when.
@@ -96,13 +135,15 @@ fn stage(app: &App) -> Stage {
             status
                 .capturing_since
                 .map_or(Stage::Starting, Stage::Recording)
-        } else if status.processing > 0 {
-            Stage::Processing
         } else if status
             .pasted_at
             .is_some_and(|pasted| pasted.elapsed() < PASTED_FOR)
         {
+            // Ahead of processing: the tick starts as the paste goes out,
+            // while the take is still finishing.
             Stage::Pasted
+        } else if status.processing > 0 {
+            Stage::Processing
         } else {
             Stage::Hidden
         }
@@ -113,6 +154,12 @@ fn stage(app: &App) -> Stage {
 fn clock() -> f32 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_secs_f32()
+}
+
+fn stream() -> MutexGuard<'static, Stream> {
+    STREAM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn motion() -> MutexGuard<'static, Option<Motion>> {
@@ -137,7 +184,7 @@ pub fn update() {
             *ANCHOR
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = anchor();
-            SMOOTH.store(0, Ordering::Relaxed);
+            stream().clear(now);
             *guard = Some(Motion {
                 stage,
                 previous: stage,
@@ -165,8 +212,12 @@ pub fn update() {
             // A new take while shrinking away: grow back in.
             if motion.leaving_at.take().is_some() {
                 motion.shown_at = now;
+                stream().clear(now);
             }
             if discriminant(&motion.stage) != discriminant(&stage) {
+                if matches!(stage, Stage::Recording(_)) {
+                    stream().clear(now);
+                }
                 let current = frame(motion, now);
                 motion.from = Look {
                     width: current.width,
@@ -425,7 +476,7 @@ fn content(
     stage: Stage,
     pill: RECT,
     opacity: f32,
-    (now, level): (f32, f32),
+    (now, stream): (f32, &Stream),
     labels: Option<&mut Vec<(RECT, String, u32)>>,
 ) {
     if opacity <= 0.0 {
@@ -456,10 +507,13 @@ fn content(
                 alpha(theme::RED, pulse(1.2) * opacity),
             );
             x += 20.0 * s;
-            let display = 0.14 + 0.86 * level;
-            for bar in 0..BARS {
-                let wobble = 0.45 + 0.55 * (now * 7.0 + bar as f32 * 1.7).sin().abs();
-                let tall = (4.0 * s).max(22.0 * s * display * wobble);
+            // The bars stay put while the loudness flows through them from
+            // right to left: each bar eases towards its right neighbour's
+            // sample until the next one arrives.
+            let slide = stream.slide(now);
+            for (bar, pair) in stream.samples.windows(2).enumerate() {
+                let level = pair[0] + (pair[1] - pair[0]) * slide;
+                let tall = 3.0 * s + 19.0 * s * level;
                 let left = x + bar as f32 * 6.0 * s;
                 canvas.round(
                     RECT {
@@ -542,16 +596,11 @@ fn render(window: HWND, frame: &Frame, now: f32) {
     };
     let radius = height as f32 / 2.0;
 
-    let level = {
-        let target = audio::level();
-        let previous = f32::from_bits(SMOOTH.load(Ordering::Relaxed));
-        let level = if target > previous {
-            previous + (target - previous) * 0.6
-        } else {
-            previous * 0.86 + target * 0.14
-        };
-        SMOOTH.store(level.to_bits(), Ordering::Relaxed);
-        level
+    let stream = {
+        let mut stream = stream();
+        let live = matches!(frame.stage, Stage::Recording(_));
+        stream.advance(now, if live { audio::level() } else { 0.0 });
+        *stream
     };
 
     unsafe {
@@ -610,14 +659,21 @@ fn render(window: HWND, frame: &Frame, now: f32) {
                 finish(&canvas, pill, frame.t, now);
             } else {
                 if frame.old > 0.0 {
-                    content(&canvas, frame.previous, pill, frame.old, (now, level), None);
+                    content(
+                        &canvas,
+                        frame.previous,
+                        pill,
+                        frame.old,
+                        (now, &stream),
+                        None,
+                    );
                 }
                 content(
                     &canvas,
                     frame.stage,
                     pill,
                     frame.new,
-                    (now, level),
+                    (now, &stream),
                     Some(&mut labels),
                 );
             }

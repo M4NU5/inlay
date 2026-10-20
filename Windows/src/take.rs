@@ -395,10 +395,10 @@ fn deliver(app: &App, record: &Generation, seconds: f64) -> (&'static str, Strin
         "take: pasting {} characters",
         record.insertion_text.chars().count()
     );
-    match paste::paste(&record.insertion_text) {
+    // The tick starts as the keystroke goes out, so it lands with the text.
+    match paste::paste(&record.insertion_text, || app.set_pasted()) {
         Ok(()) => {
             last("Pasted at your cursor");
-            app.set_pasted();
             app.note("Pasted. If nothing appeared, use Copy last message.");
             (
                 "unconfirmed",

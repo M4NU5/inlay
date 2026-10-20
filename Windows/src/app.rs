@@ -149,6 +149,8 @@ impl App {
             status.capturing_since = None;
             if recording {
                 status.error = None;
+                // A new take replaces the last one's tick.
+                status.pasted_at = None;
             }
         });
     }
