@@ -174,14 +174,18 @@ impl Sink {
             let power = self.mono.iter().map(|sample| sample * sample).sum::<f32>()
                 / self.mono.len() as f32;
             let rms = power.sqrt();
+            // -55 to -5 dBFS. The Mac's -68 to -18 pinned every bar at full
+            // height with hot inputs such as speakerphones, so speech showed
+            // as one solid band instead of following the syllables.
             let target = if rms > 0.0 {
-                ((20.0 * rms.log10() + 68.0) / 50.0).clamp(0.0, 1.0)
+                ((20.0 * rms.log10() + 55.0) / 50.0).clamp(0.0, 1.0)
             } else {
                 0.0
             };
             // Timing comes from the samples, not from how often buffers arrive.
+            // A quick release lets the gaps between syllables show.
             let seconds = self.mono.len() as f32 / self.rate;
-            let constant = if target > self.level { 0.020 } else { 0.130 };
+            let constant = if target > self.level { 0.020 } else { 0.060 };
             self.level += (target - self.level) * -(-seconds / constant).exp_m1();
             if target == 0.0 && self.level < 0.02 {
                 self.level = 0.0;
