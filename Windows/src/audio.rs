@@ -6,7 +6,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SizedSample};
 use std::f64::consts::PI;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
 
 pub const SAMPLE_RATE: u32 = 16_000;
@@ -21,6 +21,13 @@ pub enum Stop {
 }
 
 pub type Notify = Arc<dyn Fn(Stop) + Send + Sync>;
+
+/// The loudness of the latest microphone buffer, 0 to 1, for the recording pill.
+static LEVEL: AtomicU32 = AtomicU32::new(0);
+
+pub fn level() -> f32 {
+    f32::from_bits(LEVEL.load(Ordering::Relaxed))
+}
 
 pub fn input_names() -> Vec<String> {
     match cpal::default_host().input_devices() {
@@ -76,6 +83,7 @@ pub fn start(
         config.channels
     );
     let frames = Arc::new(AtomicU64::new(0));
+    LEVEL.store(0, Ordering::Relaxed);
     let sink = Sink {
         channels: config.channels.max(1) as usize,
         resampler: Resampler::new(config.sample_rate),
@@ -157,6 +165,13 @@ impl Sink {
                     .sum::<f32>()
                     * scale
             }));
+        if !self.mono.is_empty() {
+            let power = self.mono.iter().map(|sample| sample * sample).sum::<f32>()
+                / self.mono.len() as f32;
+            // Speech sits far below full scale, so stretch the quiet end.
+            let level = (power.sqrt() * 4.0).sqrt().min(1.0);
+            LEVEL.store(level.to_bits(), Ordering::Relaxed);
+        }
         let mut output = Vec::with_capacity(self.mono.len());
         self.resampler.process(&self.mono, &mut output);
         let room = (MAX_FRAMES - self.frames.load(Ordering::SeqCst)) as usize;

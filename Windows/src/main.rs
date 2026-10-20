@@ -12,10 +12,13 @@ mod controller;
 mod credentials;
 mod hotkey;
 mod icons;
+mod menu;
+mod overlay;
 mod paste;
 mod settings;
 mod startup;
 mod take;
+mod theme;
 mod tray;
 mod win;
 

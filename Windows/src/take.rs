@@ -159,6 +159,7 @@ fn record(app: &Arc<App>, inbox: &Receiver<Signal>, own: &Sender<Signal>) -> Opt
         }
     };
     log!("take: recording from {}", recording.device);
+    app.set_capturing();
 
     let signal = inbox
         .recv()
@@ -334,6 +335,7 @@ fn deliver(app: &App, record: &Generation) -> (&'static str, String) {
     );
     match paste::paste(&record.insertion_text) {
         Ok(()) => {
+            app.set_pasted();
             app.note("Pasted. If nothing appeared, use Copy last transcript.");
             (
                 "unconfirmed",
