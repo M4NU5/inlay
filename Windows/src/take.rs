@@ -7,7 +7,7 @@ use crate::api::{Api, ApiError, Generation};
 use crate::app::{App, Dictation, Ticket};
 use crate::audio::{self, SAMPLE_RATE, Stop};
 use crate::controller::Event;
-use crate::{hotkey, paste};
+use crate::{hotkey, mute, paste};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -172,12 +172,14 @@ fn record(
         }
     };
     log!("take: recording from {}", recording.device);
+    let muted = settings.config.mute_output_while_recording.then(mute::mute);
     app.set_capturing();
 
     let signal = inbox
         .recv()
         .unwrap_or(Signal::Cancel("Recording stopped.".into()));
     let frames = recording.stop();
+    drop(muted);
     match signal {
         Signal::Release => {}
         Signal::Limit => app.note("Reached the 3-minute limit. Transcribing what was recorded."),

@@ -154,6 +154,7 @@ const CHECK: i32 = 108;
 const COPY: i32 = 109;
 const TEST: i32 = 110;
 const GEAR: i32 = 111;
+const MUTE: i32 = 112;
 const HISTORY: i32 = 140;
 const DEVICE: i32 = 141;
 const SOURCE: i32 = 142;
@@ -171,7 +172,7 @@ const ROW: i32 = 6000;
 /// Sidebar buttons: `NAV + index`.
 const NAV: i32 = 120;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 20] = [
+const BUTTONS: [i32; 21] = [
     CHECK,
     COPY,
     TEST,
@@ -192,6 +193,7 @@ const BUTTONS: [i32; 20] = [
     CONNECT,
     HOTKEY,
     LAUNCH,
+    MUTE,
 ];
 /// Popup list choices: `PICK_MICROPHONE + index` and `PICK_HOTKEY + index`.
 const PICK_MICROPHONE: usize = 1000;
@@ -915,6 +917,13 @@ fn connect(window: HWND) {
     relayout(window);
 }
 
+fn toggle_mute() {
+    let result = app::shared().change_config(|config| {
+        config.mute_output_while_recording = !config.mute_output_while_recording;
+    });
+    say(result.err().map(|text| Message { text, error: true }));
+}
+
 fn toggle_launch() {
     let enabled = !state().launch;
     match startup::set(enabled) {
@@ -949,6 +958,7 @@ fn command(window: HWND, id: i32) {
         RETRY_DETAIL => history::retry_detail(window),
         _ if id >= ROW => history::select(window, (id - ROW) as usize),
         LAUNCH => toggle_launch(),
+        MUTE => toggle_mute(),
         _ if (NAV..NAV + PAGES.len() as i32).contains(&id) => {
             return show_page(window, PAGES[(id - NAV) as usize]);
         }
