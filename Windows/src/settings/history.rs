@@ -53,6 +53,9 @@ struct History {
     /// A device ID, or `None` for all devices.
     device: Option<String>,
     selected: Option<String>,
+    /// The IDs of the rows as last painted, so a click selects what it hit
+    /// even if a reply changed the records since.
+    rows: Vec<String>,
     scroll: [i32; 2],
     /// The result of the last action, and whether it failed.
     message: Option<(String, bool)>,
@@ -69,6 +72,7 @@ static HISTORY: Mutex<History> = Mutex::new(History {
     source: 0,
     device: None,
     selected: None,
+    rows: Vec::new(),
     scroll: [0, 0],
     message: None,
     copied: None,
@@ -236,10 +240,10 @@ pub fn choose_device(index: usize) {
     history.scroll = [0, 0];
 }
 
-/// Selects the `index`th shown record.
+/// Selects the record painted in row `index`.
 pub fn select(index: usize) {
     let mut history = history();
-    let id = shown(&history).get(index).map(|record| record.id.clone());
+    let id = history.rows.get(index).cloned();
     if id.is_some() && id != history.selected {
         history.selected = id;
         history.scroll[DETAIL] = 0;
@@ -308,7 +312,7 @@ pub fn delete(window: HWND) {
     thread::spawn(move || {
         let result = Api::new(&settings.config.endpoint, &settings.token)
             .and_then(|api| api.delete(&id).map_err(|error| error.to_string()));
-        {
+        let reload = {
             let mut history = history();
             match result {
                 Ok(()) => {
@@ -317,9 +321,28 @@ pub fn delete(window: HWND) {
                     if history.selected.as_ref() == Some(&id) {
                         history.selected = None;
                     }
+                    // The next page starts after the last loaded record, so
+                    // it can't be the one just deleted.
+                    if history.next.as_ref() == Some(&id) {
+                        history.next = history.records.last().map(|record| record.id.clone());
+                    }
+                    // A load already under way may still list it: drop that
+                    // reply and load again.
+                    let reload = history.loading;
+                    if reload {
+                        history.request += 1;
+                        history.loading = false;
+                    }
+                    reload
                 }
-                Err(message) => history.message = Some((message, true)),
+                Err(message) => {
+                    history.message = Some((message, true));
+                    false
+                }
             }
+        };
+        if reload {
+            load(target as HWND, false);
         }
         post(target);
     });
@@ -383,7 +406,7 @@ pub fn open_audio(window: HWND, original: bool) {
 
 pub fn build(page: &mut Builder, context: &Context) {
     page.fix();
-    let history = history();
+    let mut history = history();
     let canvas = theme::CANVAS;
 
     let heading = page.band(px(40));
@@ -450,8 +473,13 @@ pub fn build(page: &mut Builder, context: &Context) {
         bottom,
     }));
     let shown = shown(&history);
-    list_pane(page, &history, &shown, list);
-    detail_pane(page, &history, context, detail);
+    let count = shown.len();
+    let rows = shown.iter().map(|record| record.id.clone()).collect();
+    let list_scroll = list_pane(page, &history, &shown, list);
+    let detail_scroll = detail_pane(page, &history, context, detail);
+    // Keep the offsets painted, so a larger window can't leave them past the end.
+    history.rows = rows;
+    history.scroll = [list_scroll, detail_scroll];
 
     let foot = RECT {
         left: page.left(),
@@ -462,7 +490,7 @@ pub fn build(page: &mut Builder, context: &Context) {
     let more = history.next.is_some();
     let count = format!(
         "{} sessions{}{}",
-        shown.len(),
+        count,
         if more { " loaded" } else { "" },
         if history.loading {
             " · Loading…"
@@ -482,7 +510,8 @@ pub fn build(page: &mut Builder, context: &Context) {
     }
 }
 
-fn list_pane(page: &mut Builder, history: &History, shown: &[&Record], area: RECT) {
+/// Returns the list's scroll offset as painted.
+fn list_pane(page: &mut Builder, history: &History, shown: &[&Record], area: RECT) -> i32 {
     let row = px(96);
     let content = shown.len() as i32 * row;
     let limit = (content - (area.bottom - area.top)).max(0);
@@ -615,9 +644,11 @@ fn list_pane(page: &mut Builder, history: &History, shown: &[&Record], area: REC
         );
     }
     page.push(Item::Clip(None));
+    scroll
 }
 
-fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: RECT) {
+/// Returns the dictation's scroll offset as painted.
+fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: RECT) -> i32 {
     let canvas = theme::CANVAS;
     let Some(record) = selected(history) else {
         let middle = (area.top + area.bottom) / 2;
@@ -640,7 +671,7 @@ fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: R
             theme::FAINT,
             DT_CENTER | LINE,
         );
-        return;
+        return 0;
     };
 
     let header = RECT {
@@ -725,30 +756,49 @@ fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: R
         bottom: actions.top - px(11),
         ..area
     }));
-    let mut left = actions.left;
-    for (id, label, present) in [
-        (OPEN_AUDIO, "Open audio", record.inference_audio.is_some()),
+    let buttons: Vec<(i32, &str, &str)> = [
+        (
+            OPEN_AUDIO,
+            "Open audio",
+            "Audio",
+            record.inference_audio.is_some(),
+        ),
         (
             OPEN_ORIGINAL,
             "Open original",
+            "Original",
             record.original_audio.is_some(),
         ),
-    ] {
-        if present {
-            let control = Control::button(label).enabled(online);
-            let width = control.width();
-            page.place(
-                id,
-                control,
-                RECT {
-                    left,
-                    right: left + width,
-                    ..actions
-                },
-                canvas,
-            );
-            left += width + px(10);
-        }
+    ]
+    .into_iter()
+    .filter(|button| button.3)
+    .map(|(id, long, short, _)| (id, long, short))
+    .collect();
+    // Short labels when the pane is narrow, and never wider than a fair share.
+    let room = actions.right - actions.left;
+    let gaps = px(10) * (buttons.len() as i32 - 1).max(0);
+    let fits = buttons
+        .iter()
+        .map(|(_, long, _)| Control::button(long).width())
+        .sum::<i32>()
+        + gaps
+        <= room;
+    let share = (room - gaps) / (buttons.len() as i32).max(1);
+    let mut left = actions.left;
+    for (id, long, short) in buttons {
+        let control = Control::button(if fits { long } else { short }).enabled(online);
+        let width = control.width().min(share);
+        page.place(
+            id,
+            control,
+            RECT {
+                left,
+                right: left + width,
+                ..actions
+            },
+            canvas,
+        );
+        left += width + px(10);
     }
 
     let body = RECT {
@@ -810,6 +860,7 @@ fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: R
         y += height + after;
     }
     page.push(Item::Clip(None));
+    scroll
 }
 
 fn status_label(status: &str) -> &'static str {
