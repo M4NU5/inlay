@@ -18,7 +18,7 @@ use crate::icons::Look as TrayLook;
 use crate::menu::{self, Anchor, Entry};
 use crate::theme::{self, Font, px, rect};
 use crate::win::{from_wide, wide};
-use crate::{audio, config, credentials, hotkey, startup, tray};
+use crate::{audio, config, hotkey, startup, tray};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
@@ -163,12 +163,15 @@ const RECORD_COPY: i32 = 145;
 const DELETE: i32 = 146;
 const OPEN_AUDIO: i32 = 147;
 const OPEN_ORIGINAL: i32 = 148;
+const REPROCESS: i32 = 149;
+const DELETE_AUDIO: i32 = 150;
+const RETRY_DETAIL: i32 = 151;
 /// History's rows, which are painted, not controls: `ROW + index`.
 const ROW: i32 = 6000;
 /// Sidebar buttons: `NAV + index`.
 const NAV: i32 = 120;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 17] = [
+const BUTTONS: [i32; 20] = [
     CHECK,
     COPY,
     TEST,
@@ -181,6 +184,9 @@ const BUTTONS: [i32; 17] = [
     DELETE,
     OPEN_AUDIO,
     OPEN_ORIGINAL,
+    REPROCESS,
+    DELETE_AUDIO,
+    RETRY_DETAIL,
     LOAD,
     MICROPHONE,
     CONNECT,
@@ -194,6 +200,8 @@ const PICK_DEVICE: usize = 3000;
 const PICK_SOURCE: usize = 4000;
 /// A History request finished; lay the page out again.
 const WM_HISTORY: u32 = WM_APP + 30;
+/// This PC enrolled and now holds its own credential instead of the admin token.
+const WM_TOKEN: u32 = WM_APP + 31;
 /// `EM_SETCUEBANNER`: grey hint text in an empty text box.
 const EM_SETCUEBANNER: u32 = 0x1501;
 /// `WM_DEVICECHANGE` with `DBT_DEVNODES_CHANGED`: a device came or went.
@@ -218,6 +226,14 @@ fn state() -> MutexGuard<'static, State> {
 /// The open window, or null. The message loop routes dialog keys to it.
 pub fn window() -> HWND {
     WINDOW.load(Ordering::SeqCst)
+}
+
+/// Shows the credential that replaced the admin token, from any thread.
+pub fn token_replaced() {
+    let window = window();
+    if !window.is_null() {
+        unsafe { PostMessageW(window, WM_TOKEN, 0, 0) };
+    }
 }
 
 pub fn close() {
@@ -878,18 +894,13 @@ fn connect(window: HWND) {
         let endpoint = config::normalize_endpoint(&text(window, ENDPOINT))?;
         let token = config::validate_token(&text(window, TOKEN))?;
         let name = config::validate_device_name(&text(window, NAME))?;
-        credentials::write(&endpoint, &token)?;
         let app = app::shared();
         let mut settings = app.settings();
         settings.config.endpoint = endpoint;
         settings.config.device_name = name;
         settings.token = token;
-        settings
-            .config
-            .save()
-            .map_err(|error| format!("Could not save settings: {error}"))?;
+        app.save_connection(settings)?;
         log!("settings: saved the connection");
-        app.apply_settings(settings);
         Ok(())
     })();
     match result {
@@ -933,7 +944,10 @@ fn command(window: HWND, id: i32) {
         RECORD_COPY => history::copy(),
         DELETE => history::delete(window),
         OPEN_AUDIO | OPEN_ORIGINAL => history::open_audio(window, id == OPEN_ORIGINAL),
-        _ if id >= ROW => history::select((id - ROW) as usize),
+        REPROCESS => history::transcribe_again(window),
+        DELETE_AUDIO => history::delete_audio(window),
+        RETRY_DETAIL => history::retry_detail(window),
+        _ if id >= ROW => history::select(window, (id - ROW) as usize),
         LAUNCH => toggle_launch(),
         _ if (NAV..NAV + PAGES.len() as i32).contains(&id) => {
             return show_page(window, PAGES[(id - NAV) as usize]);
@@ -1003,6 +1017,13 @@ unsafe extern "system" fn window_proc(
         }
         WM_HISTORY => {
             relayout(window);
+            0
+        }
+        WM_TOKEN => {
+            // Leave a token being typed alone; Connect will save that one.
+            if unsafe { GetFocus() } != unsafe { GetDlgItem(window, TOKEN) } {
+                set_text(window, TOKEN, &app::shared().settings().token);
+            }
             0
         }
         WM_DEVICECHANGE => {

@@ -1,13 +1,14 @@
 //! The History page: shared history from the server, filtered by device and
 //! source, with the list beside the selected dictation, as on the Mac. The
-//! page fits the window; the list and the dictation scroll on their own.
+//! list holds summaries; the selected dictation's whole record loads on its
+//! own. The page fits the window; the list and the dictation scroll on their own.
 
 use super::layout::{Builder, Control, Icon, Item};
 use super::{
-    Context, DELETE, DEVICE, LOAD, OPEN_AUDIO, OPEN_ORIGINAL, RECORD_COPY, REFRESH, ROW, SOURCE,
-    WM_HISTORY, server_line,
+    Context, DELETE, DELETE_AUDIO, DEVICE, LOAD, OPEN_AUDIO, OPEN_ORIGINAL, RECORD_COPY, REFRESH,
+    REPROCESS, RETRY_DETAIL, ROW, SOURCE, WM_HISTORY, server_line,
 };
-use crate::api::{Api, Record};
+use crate::api::{Api, Detail, Summary};
 use crate::app::{self, Server};
 use crate::paste;
 use crate::theme::{self, Font, px};
@@ -43,7 +44,7 @@ pub const LIST: usize = 0;
 pub const DETAIL: usize = 1;
 
 struct History {
-    records: Vec<Record>,
+    records: Vec<Summary>,
     /// Where the next older page starts, when there is one.
     next: Option<String>,
     loading: bool,
@@ -53,6 +54,15 @@ struct History {
     /// A device ID, or `None` for all devices.
     device: Option<String>,
     selected: Option<String>,
+    /// The selected dictation's whole record, once loaded.
+    detail: Option<Detail>,
+    /// The row as it was when its detail was last asked for, so the detail
+    /// loads again only when the row changes. Timestamps are whole seconds,
+    /// so `updatedAt` alone can miss a change; the whole summary can't.
+    detail_for: Option<Summary>,
+    detail_failed: bool,
+    /// Counts detail requests, so a reply to an older one is dropped.
+    detail_request: u64,
     /// The IDs of the rows as last painted, so a click selects what it hit
     /// even if a reply changed the records since.
     rows: Vec<String>,
@@ -72,6 +82,10 @@ static HISTORY: Mutex<History> = Mutex::new(History {
     source: 0,
     device: None,
     selected: None,
+    detail: None,
+    detail_for: None,
+    detail_failed: false,
+    detail_request: 0,
     rows: Vec::new(),
     scroll: [0, 0],
     message: None,
@@ -115,7 +129,7 @@ pub fn load(window: HWND, older: bool) {
             match result {
                 Ok(page) => {
                     if before.is_some() {
-                        let fresh: Vec<Record> = page
+                        let fresh: Vec<Summary> = page
                             .items
                             .into_iter()
                             .filter(|record| !history.records.iter().any(|old| old.id == record.id))
@@ -137,8 +151,63 @@ pub fn load(window: HWND, older: bool) {
                 Err(message) => history.message = Some((message, true)),
             }
         }
+        // A summary that changed, say after Transcribe again, reloads its
+        // detail. So does loading the newest page, as Refresh does: deleting
+        // audio leaves the summary as it was.
+        load_detail(target, before.is_none());
         post(target);
     });
+}
+
+/// Loads the selected row's whole record, unless it is loaded or loading
+/// already for the row as the list last showed it. With `again`, loads it
+/// regardless. The reply arrives as `WM_HISTORY`.
+fn load_detail(window: usize, again: bool) {
+    let (id, request) = {
+        let mut history = history();
+        let Some(summary) = selected(&history) else {
+            return;
+        };
+        let wanted = summary.clone();
+        if !again && history.detail_for.as_ref() == Some(&wanted) {
+            return;
+        }
+        let id = wanted.id.clone();
+        history.detail_for = Some(wanted);
+        history.detail_failed = false;
+        history.detail_request += 1;
+        (id, history.detail_request)
+    };
+    let settings = app::shared().settings();
+    thread::spawn(move || {
+        let result = Api::new(&settings.config.endpoint, &settings.token)
+            .and_then(|api| api.detail(&id).map_err(|error| error.to_string()));
+        {
+            let mut history = history();
+            if history.detail_request != request {
+                return;
+            }
+            match result {
+                Ok(detail) => history.detail = Some(detail),
+                Err(message) => {
+                    // Drop the old record, so Try again shows instead of stale content.
+                    history.detail = None;
+                    history.detail_for = None;
+                    history.detail_failed = true;
+                    history.message = Some((message, true));
+                }
+            }
+        }
+        post(window);
+    });
+}
+
+/// The selected row's loaded record. `None` while it loads.
+fn detail(history: &History) -> Option<&Detail> {
+    history
+        .detail
+        .as_ref()
+        .filter(|detail| history.selected.as_ref() == Some(&detail.id))
 }
 
 fn post(window: usize) {
@@ -167,7 +236,7 @@ pub fn catch_up(window: HWND, finished: u64) {
 }
 
 /// The records the device filter lets through, newest first.
-fn shown(history: &History) -> Vec<&Record> {
+fn shown(history: &History) -> Vec<&Summary> {
     history
         .records
         .iter()
@@ -240,15 +309,25 @@ pub fn choose_device(index: usize) {
     history.scroll = [0, 0];
 }
 
-/// Selects the record painted in row `index`.
-pub fn select(index: usize) {
-    let mut history = history();
-    let id = history.rows.get(index).cloned();
-    if id.is_some() && id != history.selected {
+/// Selects the record painted in row `index`, and loads its whole record.
+pub fn select(window: HWND, index: usize) {
+    {
+        let mut history = history();
+        let id = history.rows.get(index).cloned();
+        if id.is_none() || id == history.selected {
+            return;
+        }
         history.selected = id;
         history.scroll[DETAIL] = 0;
         history.copied = None;
     }
+    load_detail(window as usize, false);
+}
+
+/// Tries again to load a dictation that could not be loaded.
+pub fn retry_detail(window: HWND) {
+    history().message = None;
+    load_detail(window as usize, true);
 }
 
 /// Scrolls pane `pane` by `delta` device pixels, up to `limit`.
@@ -263,7 +342,7 @@ pub fn scroll(pane: usize, delta: i32, limit: i32) -> bool {
     moved
 }
 
-fn selected(history: &History) -> Option<&Record> {
+fn selected(history: &History) -> Option<&Summary> {
     let id = history.selected.as_ref()?;
     history.records.iter().find(|record| record.id == *id)
 }
@@ -272,7 +351,7 @@ fn selected(history: &History) -> Option<&Record> {
 pub fn copy() {
     let (id, text) = {
         let history = history();
-        match selected(&history) {
+        match detail(&history) {
             Some(record) => (record.id.clone(), record.final_text.clone()),
             None => return,
         }
@@ -345,6 +424,96 @@ pub fn delete(window: HWND) {
         if reload {
             load(target as HWND, false);
         }
+        post(target);
+    });
+}
+
+/// Asks, then deletes the selected dictation's audio. Its text stays.
+pub fn delete_audio(window: HWND) {
+    let Some(id) = history().selected.clone() else {
+        return;
+    };
+    let (text, title) = (
+        wide(
+            "Delete this recording's audio from the server?\n\nThe transcript stays in history. This cannot be undone.",
+        ),
+        wide("Inlay"),
+    );
+    let answer = unsafe {
+        MessageBoxW(
+            window,
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+        )
+    };
+    if answer != IDYES {
+        return;
+    }
+    let settings = app::shared().settings();
+    let target = window as usize;
+    thread::spawn(move || {
+        let result = Api::new(&settings.config.endpoint, &settings.token)
+            .and_then(|api| api.delete_audio(&id).map_err(|error| error.to_string()));
+        let deleted = result.is_ok();
+        history().message = Some(match result {
+            Ok(()) => {
+                log!("history: deleted a recording's audio");
+                (
+                    "Deleted the audio. The transcript stays in history.".into(),
+                    false,
+                )
+            }
+            Err(message) => (message, true),
+        });
+        // The summary doesn't change, so reload the record itself.
+        if deleted && history().selected.as_ref() == Some(&id) {
+            load_detail(target, true);
+        }
+        post(target);
+    });
+}
+
+/// Queues a failed or cancelled take's audio to be transcribed again, then
+/// follows it and loads History again when it ends.
+pub fn transcribe_again(window: HWND) {
+    let Some(id) = history().selected.clone() else {
+        return;
+    };
+    history().message = Some(("Transcribing again…".into(), false));
+    let settings = app::shared().settings();
+    let target = window as usize;
+    thread::spawn(move || {
+        let api = match Api::new(&settings.config.endpoint, &settings.token) {
+            Ok(api) => api,
+            Err(message) => {
+                history().message = Some((message, true));
+                return post(target);
+            }
+        };
+        if let Err(error) = api.reprocess(&id) {
+            history().message = Some((error.to_string(), true));
+            return post(target);
+        }
+        log!("history: queued a take to transcribe again");
+        // Loading clears the page's message, so set it after.
+        load(target as HWND, false);
+        history().message = Some(("Transcribing again…".into(), false));
+        post(target);
+        let ended = api.events(&id, |_| {});
+        let outcome = match &ended {
+            Ok(record) if record.status == "completed" => None,
+            Ok(record) => Some((
+                record
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "It could not be transcribed.".into()),
+                true,
+            )),
+            Err(error) => Some((error.to_string(), true)),
+        };
+        load(target as HWND, false);
+        history().message = outcome;
         post(target);
     });
 }
@@ -512,7 +681,7 @@ pub fn build(page: &mut Builder, context: &Context) {
 }
 
 /// Returns the list's scroll offset as painted.
-fn list_pane(page: &mut Builder, history: &History, shown: &[&Record], area: RECT) -> i32 {
+fn list_pane(page: &mut Builder, history: &History, shown: &[&Summary], area: RECT) -> i32 {
     let row = px(96);
     let content = shown.len() as i32 * row;
     let limit = (content - (area.bottom - area.top)).max(0);
@@ -597,7 +766,7 @@ fn list_pane(page: &mut Builder, history: &History, shown: &[&Record], area: REC
         );
         if record.status != "completed" {
             page.text(
-                status_label(&record.status),
+                &row_status(record),
                 date,
                 Font::Small,
                 theme::ORANGE,
@@ -624,7 +793,7 @@ fn list_pane(page: &mut Builder, history: &History, shown: &[&Record], area: REC
             colour: theme::MUTED,
         });
         page.text(
-            &source_label(record),
+            &source_label(record.imported_source.is_some(), &record.device.name),
             RECT {
                 left: left + px(22),
                 top: top + px(70),
@@ -651,7 +820,7 @@ fn list_pane(page: &mut Builder, history: &History, shown: &[&Record], area: REC
 /// Returns the dictation's scroll offset as painted.
 fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: RECT) -> i32 {
     let canvas = theme::CANVAS;
-    let Some(record) = selected(history) else {
+    if selected(history).is_none() {
         let middle = (area.top + area.bottom) / 2;
         let size = px(44);
         page.push(Item::Icon {
@@ -672,6 +841,46 @@ fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: R
             theme::FAINT,
             DT_CENTER | LINE,
         );
+        return 0;
+    }
+    let Some(record) = detail(history) else {
+        let middle = (area.top + area.bottom) / 2;
+        let text = RECT {
+            top: middle - px(30),
+            bottom: middle - px(6),
+            ..area
+        };
+        if history.detail_failed {
+            page.text(
+                "This dictation could not be loaded.",
+                text,
+                Font::Body,
+                theme::MUTED,
+                DT_CENTER | LINE,
+            );
+            let button = Control::button("Try again");
+            let width = button.width();
+            let left = (area.left + area.right - width) / 2;
+            page.place(
+                RETRY_DETAIL,
+                button,
+                RECT {
+                    left,
+                    top: middle + px(4),
+                    right: left + width,
+                    bottom: middle + px(38),
+                },
+                canvas,
+            );
+        } else {
+            page.text(
+                "Loading dictation…",
+                text,
+                Font::Body,
+                theme::MUTED,
+                DT_CENTER | LINE,
+            );
+        }
         return 0;
     };
 
@@ -711,7 +920,10 @@ fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: R
         DT_LEFT | LINE | DT_END_ELLIPSIS,
     );
 
-    let mut facts = vec![source_label(record)];
+    let mut facts = vec![source_label(
+        record.imported_source.is_some(),
+        &record.device.name,
+    )];
     match &record.imported_source {
         None => facts.push(status_label(&record.status).into()),
         Some(source) => {
@@ -757,7 +969,14 @@ fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: R
         bottom: actions.top - px(11),
         ..area
     }));
+    let has_audio = record.inference_audio.is_some() || record.original_audio.is_some();
     let buttons: Vec<(i32, &str, &str)> = [
+        (
+            REPROCESS,
+            "Transcribe again",
+            "Again",
+            record.can_transcribe_again(),
+        ),
         (
             OPEN_AUDIO,
             "Open audio",
@@ -769,6 +988,12 @@ fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: R
             "Open original",
             "Original",
             record.original_audio.is_some(),
+        ),
+        (
+            DELETE_AUDIO,
+            "Delete audio",
+            "Delete",
+            has_audio && record.is_terminal(),
         ),
     ]
     .into_iter()
@@ -812,6 +1037,17 @@ fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: R
     if let Some(error) = &record.error {
         blocks.push((error.clone(), Font::Body, theme::ORANGE, px(14)));
     }
+    if matches!(record.status.as_str(), "failed" | "cancelled") {
+        let note = if has_audio {
+            format!(
+                "This recording was {}. Its audio is kept in shared history until the audio retention period ends or you delete it.",
+                record.status
+            )
+        } else {
+            "Audio was removed by the retention setting.".into()
+        };
+        blocks.push((note, Font::Small, theme::MUTED, px(14)));
+    }
     let (text, colour) = if record.final_text.is_empty() {
         ("No transcript available.".to_string(), theme::MUTED)
     } else {
@@ -826,6 +1062,12 @@ fn detail_pane(page: &mut Builder, history: &History, context: &Context, area: R
         };
         blocks.push((title.into(), Font::Strong, theme::MUTED, px(6)));
         blocks.push((record.raw_text.clone(), Font::Small, theme::MUTED, px(18)));
+    }
+    if let (None, Some(reason)) = (
+        &record.original_audio,
+        &record.original_audio_omitted_reason,
+    ) {
+        blocks.push((reason.clone(), Font::Small, theme::FAINT, px(6)));
     }
     if let Some(speech) = &record.speech {
         blocks.push((
@@ -877,17 +1119,25 @@ fn status_label(status: &str) -> &'static str {
     }
 }
 
-fn source_label(record: &Record) -> String {
-    if record.imported_source.is_some() {
-        "Imported from Wispr Flow".into()
-    } else {
-        record.device.name.clone()
+/// A row's status beside its date, with its place in the queue when it waits.
+fn row_status(record: &Summary) -> String {
+    match (record.status.as_str(), record.queue_position) {
+        ("queued", Some(position)) => format!("Queued #{position}"),
+        (status, _) => status_label(status).into(),
     }
 }
 
-fn summary(record: &Record) -> String {
-    if !record.final_text.is_empty() {
-        record.final_text.clone()
+fn source_label(imported: bool, device: &str) -> String {
+    if imported {
+        "Imported from Wispr Flow".into()
+    } else {
+        device.to_string()
+    }
+}
+
+fn summary(record: &Summary) -> String {
+    if !record.preview_text.is_empty() {
+        record.preview_text.clone()
     } else if record.imported_source.is_some() {
         "No transcript recovered".into()
     } else {

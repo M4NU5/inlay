@@ -23,11 +23,11 @@ cargo xwin build --release   # from WSL/Linux; on Windows use `cargo build --rel
 
 ## Verify on Windows
 
-1. Run a real server. Use the `inlay-server-linux-x64-cpu` package from the upstream "TypeScript server" Actions run that matches your commit, or build one per [`Server/README.md`](../Server/README.md). Put models under the repository's ignored `.local/`. Run it in WSL on `127.0.0.1:8391` with `--token-file` so token handling is exercised. To save CPU, turn proofreading off through `PUT /v1/preferences`. Never substitute fake inference.
+1. Run a real server. Use the `inlay-server-linux-x64-cpu` package from the upstream "TypeScript server" Actions run that matches your commit, or build one per [`Server/README.md`](../Server/README.md). Put models under the repository's ignored `.local/`. Run it in WSL on `127.0.0.1:8391`. It creates `admin-token` in its data folder, or reads `--token-file`; connect with that so enrollment is exercised. To save CPU, turn proofreading off through `PUT /v1/preferences`. Never substitute fake inference.
 2. Copy `inlay.exe` to a Windows path and start it. To keep test settings apart from a real install, set `INLAY_CLIENT_DATA_DIR`. When launching from WSL, pass it through `WSLENV`.
 3. Check by hand, and record how:
    - The tray icon and tooltip for offline, ready, recording, processing and error.
-   - The window: each page, and scrolling when it is smaller than its page. On This PC, **Connect** with a wrong token, with a LAN `http://` address (refused), and with the right token. Confirm `config.json`, the Credential Manager entry and the Run key.
+   - The window: each page, and scrolling when it is smaller than its page. On This PC, **Connect** with a wrong token, with a LAN `http://` address (refused), and with the admin token. The log should show the PC enrolling, `GET /v1/devices` (admin token) should list it, and the Credential Manager entry should hold the new device credential, not the admin token. Confirm `config.json` and the Run key.
    - **Test microphone**: `GET /v1/generations` should show a `test` record with delivery `tested`, and nothing pasted.
    - History: filters, selecting a row, scrolling the list, and deleting one of your own test records.
    - A hold-to-talk take. The log should show admission, the microphone, uploaded frames and chunks, and the delivery status. `GET /v1/generations` should show the record with `device`, audio artifacts and `delivery`.
@@ -58,5 +58,5 @@ The machine running these checks usually belongs to someone who is using it.
 | `app.rs`                                    | Shared state, server health monitor, paste ordering.                                                    |
 | `tray.rs`                                   | Tray icon, tooltip, menu, notifications.                                                                |
 | `settings/`                                 | The main window: sidebar, scrolling, controls (`mod.rs`), page layout (`layout.rs`), one file per page. |
-| `config.rs`, `credentials.rs`, `startup.rs` | Config file, Credential Manager token, Run key.                                                         |
+| `config.rs`, `credentials.rs`, `startup.rs` | Config file, Credential Manager device credential, Run key.                                             |
 | `icons.rs`                                  | Tray icons drawn in code.                                                                               |

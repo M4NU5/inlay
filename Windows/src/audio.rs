@@ -3,7 +3,7 @@
 //! to the 16 kHz float32 stream the server's speech model expects.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, Sample, SampleFormat, SizedSample};
+use cpal::{FromSample, I24, Sample, SampleFormat, SizedSample};
 use std::f64::consts::PI;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -106,7 +106,10 @@ pub fn start(
     let stream = match format {
         SampleFormat::F32 => build::<f32>(&device, config, sink, notify),
         SampleFormat::I16 => build::<i16>(&device, config, sink, notify),
+        SampleFormat::I24 => build::<I24>(&device, config, sink, notify),
         SampleFormat::I32 => build::<i32>(&device, config, sink, notify),
+        SampleFormat::I64 => build::<i64>(&device, config, sink, notify),
+        SampleFormat::F64 => build::<f64>(&device, config, sink, notify),
         SampleFormat::U16 => build::<u16>(&device, config, sink, notify),
         SampleFormat::U8 => build::<u8>(&device, config, sink, notify),
         other => {

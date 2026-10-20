@@ -93,7 +93,14 @@ fn record(
     own: &Sender<Signal>,
     test: bool,
 ) -> Option<Released> {
-    let settings = app.settings();
+    // Admission comes before the microphone: an unavailable server means no recording.
+    let settings = match app.ensure_ready(app.settings()) {
+        Ok(settings) => settings,
+        Err(message) => {
+            app.fail(&format!("Inlay can't record. {message}"));
+            return None;
+        }
+    };
     let api = match Api::new(&settings.config.endpoint, &settings.token) {
         Ok(api) => api,
         Err(message) => {
@@ -101,11 +108,6 @@ fn record(
             return None;
         }
     };
-    // Admission comes before the microphone: an unavailable server means no recording.
-    if let Err(message) = app.ensure_ready(&settings) {
-        app.fail(&format!("Inlay can't record. {message}"));
-        return None;
-    }
     let request_id = uuid::Uuid::new_v4().to_string();
     let created = match api.create(
         &request_id,

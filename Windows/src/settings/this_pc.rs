@@ -18,6 +18,9 @@ pub fn build(page: &mut Builder, context: &Context) {
             .dot(dot)
             .value(&context.settings.config.endpoint)
             .control(CONNECT, Control::button("Connect")),
+        Row::caption(
+            "Paste the server's admin token once (admin-token in its data folder, or its --token-file). This PC then keeps its own revocable credential.",
+        ),
     ]);
     match (&context.message, &context.server) {
         (Some(message), _) => page.note(

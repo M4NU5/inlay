@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use std::{fmt, thread};
 
-pub const API_VERSION: u64 = 2;
+pub const API_VERSION: u64 = 4;
 const RESPONSE_LIMIT: u64 = 16 * 1024 * 1024;
 const EVENT_LINE_LIMIT: u64 = 2 * 1024 * 1024;
 /// A recording's audio is at most 180 seconds; original audio can be stereo
@@ -21,9 +21,11 @@ const ARTIFACT_LIMIT: u64 = 256 * 1024 * 1024;
 pub enum ApiError {
     /// No HTTP response: refused, unreachable, timed out, or TLS failed.
     Offline(String),
-    /// The server answered with an error status.
+    /// The server answered with an error status. `code` is the server's
+    /// machine-readable reason, such as `enrollment_required`.
     Rejected {
         status: u16,
+        code: Option<String>,
         message: String,
     },
     /// The connection closed before the generation finished.
@@ -37,6 +39,23 @@ impl ApiError {
             ApiError::Offline(_) | ApiError::Disconnected => true,
             ApiError::Rejected { status, .. } => matches!(status, 408 | 429 | 502 | 503 | 504),
             ApiError::Invalid(_) => false,
+        }
+    }
+
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            ApiError::Rejected { code, .. } => code.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The server refused the credential, or is throttling failed ones.
+    pub fn is_credential(&self) -> bool {
+        match self {
+            ApiError::Rejected { status, code, .. } => {
+                *status == 401 || code.as_deref() == Some("auth_throttled")
+            }
+            _ => false,
         }
     }
 
@@ -111,11 +130,29 @@ fn enabled() -> bool {
     true
 }
 
-/// A generation as shared history shows it. Only the fields the History page
-/// reads; the server sends more.
+/// One row of shared history. The list carries only this; the History page
+/// loads the whole record, a [`Detail`], for the row it shows.
+#[derive(Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Summary {
+    pub id: String,
+    pub device: Device,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub preview_text: String,
+    #[serde(default)]
+    pub queue_position: Option<u64>,
+    #[serde(default)]
+    pub imported_source: Option<Imported>,
+}
+
+/// A generation as the History page shows it. Only the fields it reads; the
+/// server sends more.
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Record {
+pub struct Detail {
     pub id: String,
     pub device: Device,
     pub status: String,
@@ -130,15 +167,25 @@ pub struct Record {
     pub inference_audio: Option<Audio>,
     #[serde(default)]
     pub original_audio: Option<Audio>,
+    /// Why there is no original audio, such as the setting being off.
+    #[serde(default)]
+    pub original_audio_omitted_reason: Option<String>,
     #[serde(default)]
     pub speech: Option<Model>,
     #[serde(default)]
     pub imported_source: Option<Imported>,
 }
 
-impl Record {
+impl Detail {
     pub fn is_terminal(&self) -> bool {
         matches!(self.status.as_str(), "completed" | "failed" | "cancelled")
+    }
+
+    /// A failed or cancelled take with its audio still on the server.
+    pub fn can_transcribe_again(&self) -> bool {
+        matches!(self.status.as_str(), "failed" | "cancelled")
+            && self.inference_audio.is_some()
+            && self.imported_source.is_none()
     }
 
     /// The recording's length, from its audio or the imported source.
@@ -153,7 +200,7 @@ impl Record {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 pub struct Device {
     pub id: String,
     pub name: String,
@@ -173,7 +220,7 @@ pub struct Model {
     pub backend: String,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Imported {
     #[serde(default)]
@@ -186,7 +233,7 @@ pub struct Imported {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryPage {
-    pub items: Vec<Record>,
+    pub items: Vec<Summary>,
     #[serde(default)]
     pub next_cursor: Option<String>,
 }
@@ -243,13 +290,36 @@ impl Api {
         }
     }
 
+    /// Reachability only. The one route that needs no credential, so asking
+    /// without a token never counts as a failed sign-in.
+    pub fn liveness(&self) -> Result<(), ApiError> {
+        send(self.request("GET", "v1/liveness"), Body::Empty).map(drop)
+    }
+
     pub fn health(&self) -> Result<Health, ApiError> {
         decode(send(self.request("GET", "v1/health"), Body::Empty)?)
     }
 
-    /// Health is public, so an authenticated read is what proves the token.
+    /// Health also accepts the server's admin token, so a data route is what
+    /// proves this is a device credential. The admin token gets 403
+    /// `enrollment_required` here.
     pub fn check_token(&self) -> Result<(), ApiError> {
         send(self.request("GET", "v1/preferences"), Body::Empty).map(drop)
+    }
+
+    /// Swaps the admin token for this PC's own credential, as the Mac does.
+    /// Enrolling again rotates the credential, so the old one stops working.
+    pub fn enroll(&self, device_id: &str, device_name: &str) -> Result<String, ApiError> {
+        #[derive(Deserialize)]
+        struct Enrolled {
+            token: String,
+        }
+        let body = json!({ "device": { "id": device_id, "name": device_name } });
+        let enrolled: Enrolled = decode(send(
+            self.request("POST", "v1/devices/enroll"),
+            Body::Json(&body),
+        )?)?;
+        Ok(enrolled.token)
     }
 
     /// Admission happens here, before the microphone opens. `mode` is
@@ -353,6 +423,32 @@ impl Api {
         .map(drop)
     }
 
+    /// Queues a failed or cancelled take's sealed audio to be transcribed again.
+    pub fn reprocess(&self, id: &str) -> Result<(), ApiError> {
+        send(
+            self.request("POST", &format!("v1/generations/{id}/reprocess")),
+            Body::Empty,
+        )
+        .map(drop)
+    }
+
+    /// Deletes a finished take's audio. Its text stays in history.
+    pub fn delete_audio(&self, id: &str) -> Result<(), ApiError> {
+        send(
+            self.request("DELETE", &format!("v1/generations/{id}/audio")),
+            Body::Empty,
+        )
+        .map(drop)
+    }
+
+    /// The whole record, for the History page.
+    pub fn detail(&self, id: &str) -> Result<Detail, ApiError> {
+        decode(send(
+            self.request("GET", &format!("v1/generations/{id}")),
+            Body::Empty,
+        )?)
+    }
+
     /// Downloads one of a generation's files, such as `inference.wav`.
     pub fn artifact(&self, id: &str, filename: &str) -> Result<Vec<u8>, ApiError> {
         let request = self
@@ -450,6 +546,10 @@ impl Api {
             if line.len() as u64 > EVENT_LINE_LIMIT {
                 return Err(ApiError::Invalid("event line too long".into()));
             }
+            // A line cut off by a dropped connection is recovered, not rejected.
+            if line.last() != Some(&b'\n') {
+                return Err(ApiError::Disconnected);
+            }
             if line.trim_ascii().is_empty() {
                 continue;
             }
@@ -476,6 +576,7 @@ fn send(request: ureq::Request, body: Body) -> Result<ureq::Response, ApiError> 
         Ok(response) if (200..300).contains(&response.status()) => Ok(response),
         Ok(response) => Err(ApiError::Rejected {
             status: response.status(),
+            code: None,
             message: format!(
                 "The server redirected the request (HTTP {}). Check the server address.",
                 response.status()
@@ -492,22 +593,34 @@ fn send(request: ureq::Request, body: Body) -> Result<ureq::Response, ApiError> 
 fn rejected(status: u16, response: ureq::Response) -> ApiError {
     #[derive(Deserialize)]
     struct Failure {
+        #[serde(default)]
+        code: Option<String>,
         message: String,
     }
-    let detail = response
+    let failure = response
         .into_string()
         .ok()
-        .and_then(|text| serde_json::from_str::<Failure>(&text).ok())
-        .map(|failure| failure.message.chars().take(1000).collect::<String>());
+        .and_then(|text| serde_json::from_str::<Failure>(&text).ok());
+    let code = failure.as_ref().and_then(|failure| failure.code.clone());
+    let detail = failure.map(|failure| failure.message.chars().take(1000).collect::<String>());
     let message = match (status, detail) {
-        (401 | 403, _) => "The server rejected the token. Update it in Inlay settings.".to_string(),
+        (401, _) => "The server rejected this PC's token. On This PC, paste the server's admin token and Connect.".to_string(),
+        // The server's own wording here is about the Mac.
+        (403, _) if code.as_deref() == Some("enrollment_required") => {
+            "This is the server's admin token. Inlay swaps it for this PC's own credential when it connects.".into()
+        }
         (_, Some(detail)) => detail,
+        (403, None) => "The server refused this request.".into(),
         (409, None) => "The recording changed before the request could finish.".into(),
         (429, None) => "The server has reached its capacity. Try again shortly.".into(),
         (503, None) => "The server is online but its models are not ready.".into(),
         (_, None) => format!("The server could not complete the request (HTTP {status})."),
     };
-    ApiError::Rejected { status, message }
+    ApiError::Rejected {
+        status,
+        code,
+        message,
+    }
 }
 
 fn decode<T: DeserializeOwned>(response: ureq::Response) -> Result<T, ApiError> {

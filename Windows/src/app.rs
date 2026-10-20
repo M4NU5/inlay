@@ -1,9 +1,9 @@
 //! State shared by the tray, the controller and the take threads.
 
-use crate::api::{API_VERSION, Api};
+use crate::api::{API_VERSION, Api, ApiError};
 use crate::config::Config;
 use crate::controller::Event;
-use crate::{hotkey, paste, tray};
+use crate::{credentials, hotkey, paste, settings as window, tray};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -81,8 +81,37 @@ pub struct Status {
     pub pasted_at: Option<Instant>,
 }
 
+/// Why the server can't take a dictation.
+pub struct Unready {
+    pub message: String,
+    /// The credential was refused. Asking again soon would only count as more
+    /// failed sign-ins, and the server locks an address out after ten.
+    pub credential: bool,
+}
+
+impl Unready {
+    fn new(message: impl Into<String>) -> Unready {
+        Unready {
+            message: message.into(),
+            credential: false,
+        }
+    }
+}
+
+impl From<ApiError> for Unready {
+    fn from(error: ApiError) -> Unready {
+        Unready {
+            credential: error.is_credential(),
+            message: error.to_string(),
+        }
+    }
+}
+
 pub struct App {
     settings: Mutex<Settings>,
+    /// Held while enrolling. Enrolling again rotates the credential, so two
+    /// checks enrolling at once would leave this PC holding a dead one.
+    enrolling: Mutex<()>,
     status: Mutex<Status>,
     pub events: Sender<Event>,
     wake_monitor: Sender<()>,
@@ -93,6 +122,7 @@ impl App {
     pub fn new(settings: Settings, events: Sender<Event>, wake_monitor: Sender<()>) -> App {
         App {
             settings: Mutex::new(settings),
+            enrolling: Mutex::new(()),
             status: Mutex::new(Status {
                 server: Server::Checking,
                 recording: false,
@@ -118,10 +148,22 @@ impl App {
         lock(&self.settings).clone()
     }
 
-    pub fn apply_settings(&self, settings: Settings) {
-        hotkey::set_key(hotkey::key(&settings.config.hotkey).vk);
-        *lock(&self.settings) = settings;
+    /// Saves and applies a new connection: the token in Credential Manager,
+    /// the rest in the config file. Holds the settings while it does, so an
+    /// enrollment finishing meanwhile can't overwrite the token just entered.
+    pub fn save_connection(&self, connection: Settings) -> Result<(), String> {
+        {
+            let mut settings = lock(&self.settings);
+            credentials::write(&connection.config.endpoint, &connection.token)?;
+            connection
+                .config
+                .save()
+                .map_err(|error| format!("Could not save settings: {error}"))?;
+            hotkey::set_key(hotkey::key(&connection.config.hotkey).vk);
+            *settings = connection;
+        }
         self.recheck();
+        Ok(())
     }
 
     /// Saves a change to this PC's settings that does not affect the server
@@ -236,17 +278,98 @@ impl App {
     }
 
     /// Admission check before a take. Uses the monitor's last answer when the
-    /// server was ready, and asks again otherwise.
-    pub fn ensure_ready(&self, settings: &Settings) -> Result<(), String> {
-        if self.status(|status| status.server == Server::Ready) {
-            return Ok(());
+    /// server was ready, and asks again otherwise. Returns the settings the take
+    /// should use: asking again may have enrolled, replacing the admin token.
+    pub fn ensure_ready(&self, settings: Settings) -> Result<Settings, String> {
+        if !self.status(|status| status.server == Server::Ready) {
+            let result = self.probe(&settings);
+            self.set_server(match &result {
+                Ok(_) => Server::Ready,
+                Err(unready) => Server::Unavailable(unready.message.clone()),
+            });
+            result.map_err(|unready| unready.message)?;
         }
-        let result = probe(&settings.config.endpoint, &settings.token);
-        self.set_server(match &result {
-            Ok(_) => Server::Ready,
-            Err(message) => Server::Unavailable(message.clone()),
-        });
-        result.map(drop)
+        // The monitor may have enrolled since `settings` was read, too.
+        let current = self.settings();
+        // Only the token can have changed for the server just checked.
+        Ok(if current.config.endpoint == settings.config.endpoint {
+            Settings {
+                token: current.token,
+                ..settings
+            }
+        } else {
+            settings
+        })
+    }
+
+    /// Health, API version and credential in one check. Returns the server's
+    /// message. A server's admin token is first swapped for this PC's own
+    /// credential, as the Mac does.
+    pub fn probe(&self, settings: &Settings) -> Result<String, Unready> {
+        let api = Api::new(&settings.config.endpoint, &settings.token).map_err(Unready::new)?;
+        if settings.token.is_empty() {
+            // Only liveness answers without a credential.
+            api.liveness()?;
+            return Err(Unready {
+                message: "Paste the server's admin token on This PC, then Connect.".into(),
+                credential: true,
+            });
+        }
+        let health = api.health()?;
+        if health.api_version != API_VERSION {
+            return Err(Unready::new(format!(
+                "This server uses API version {}, but Inlay for Windows needs version {API_VERSION}. Update the older side.",
+                health.api_version
+            )));
+        }
+        match api.check_token() {
+            Err(error) if error.code() == Some("enrollment_required") => {
+                let token = self.enroll(settings)?;
+                Api::new(&settings.config.endpoint, &token)
+                    .map_err(Unready::new)?
+                    .check_token()?;
+            }
+            result => result?,
+        }
+        if !health.ready {
+            return Err(Unready::new(
+                health
+                    .message
+                    .unwrap_or_else(|| "The server is not ready yet.".into()),
+            ));
+        }
+        Ok(health.message.unwrap_or_else(|| "Server ready.".into()))
+    }
+
+    /// Enrolls this PC with the admin token in `settings`, and keeps the
+    /// credential it gets back in place of that token. Returns the token to
+    /// use now.
+    fn enroll(&self, settings: &Settings) -> Result<String, Unready> {
+        let _one = lock(&self.enrolling);
+        let current = self.settings();
+        if current.config.endpoint != settings.config.endpoint {
+            return Err(Unready::new(
+                "The server address changed. Connecting again…",
+            ));
+        }
+        if current.token != settings.token {
+            // Another check enrolled while this one waited, or Connect saved a new token.
+            return Ok(current.token);
+        }
+        let token = Api::new(&settings.config.endpoint, &settings.token)
+            .map_err(Unready::new)?
+            .enroll(&settings.config.device_id, &settings.config.device_name)?;
+        {
+            let mut saved = lock(&self.settings);
+            if saved.config.endpoint != settings.config.endpoint || saved.token != settings.token {
+                return Err(Unready::new("The connection changed. Connecting again…"));
+            }
+            credentials::write(&settings.config.endpoint, &token).map_err(Unready::new)?;
+            saved.token = token.clone();
+        }
+        log!("server: enrolled this PC and saved its own credential");
+        window::token_replaced();
+        Ok(token)
     }
 
     /// A request failed in a way that suggests the server is gone.
@@ -316,36 +439,23 @@ impl Drop for Processing {
     }
 }
 
-/// Health, API version and token in one check. Returns the server's message.
-pub fn probe(endpoint: &str, token: &str) -> Result<String, String> {
-    let api = Api::new(endpoint, token)?;
-    let health = api.health().map_err(|error| error.to_string())?;
-    if health.api_version != API_VERSION {
-        return Err(format!(
-            "This server uses API version {}, but Inlay for Windows needs version {API_VERSION}. Update the older side.",
-            health.api_version
-        ));
-    }
-    api.check_token().map_err(|error| error.to_string())?;
-    if !health.ready {
-        return Err(health
-            .message
-            .unwrap_or_else(|| "The server is not ready yet.".into()));
-    }
-    Ok(health.message.unwrap_or_else(|| "Server ready.".into()))
-}
-
 /// Keeps the tray's server state current. Checks quickly while the server is
-/// unavailable and slowly once it is ready. Settings changes wake it early.
+/// unavailable and slowly once it is ready, or once it has refused the
+/// credential. Settings changes wake it early.
 pub fn monitor(app: Arc<App>, wake: Receiver<()>) {
     loop {
         let settings = app.settings();
-        app.set_server(match probe(&settings.config.endpoint, &settings.token) {
-            Ok(_) => Server::Ready,
-            Err(message) => Server::Unavailable(message),
-        });
-        let ready = app.status(|status| status.server == Server::Ready);
-        let pause = Duration::from_secs(if ready { 30 } else { 5 });
+        let pause = match app.probe(&settings) {
+            Ok(_) => {
+                app.set_server(Server::Ready);
+                30
+            }
+            Err(unready) => {
+                app.set_server(Server::Unavailable(unready.message));
+                if unready.credential { 60 } else { 5 }
+            }
+        };
+        let pause = Duration::from_secs(pause);
         if let Err(RecvTimeoutError::Disconnected) = wake.recv_timeout(pause) {
             return;
         }

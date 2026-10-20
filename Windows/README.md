@@ -1,6 +1,6 @@
 # Inlay for Windows
 
-A hold-to-talk dictation client for Windows. It sits in the notification area, records while you hold a key, sends the audio to an [Inlay server](../Server/README.md), and pastes the transcript at your cursor. It uses the same HTTP API (version 2) as the Mac app and needs no server changes.
+A hold-to-talk dictation client for Windows. It sits in the notification area, records while you hold a key, sends the audio to an [Inlay server](../Server/README.md), and pastes the transcript at your cursor. It uses the same HTTP API (version 4) as the Mac app and needs no server changes.
 
 It is a small Rust program: raw Win32 for the tray, main window, keyboard hook and paste, WASAPI (through `cpal`) for the microphone, and blocking HTTP (through `ureq`) for the server.
 
@@ -63,32 +63,33 @@ No installer or administrator rights are needed.
 
 Choose **Open Inlay…** from the tray menu. The window follows the Mac app: a sidebar with **Dictation**, **History**, **Microphone** and **This PC** pages. Changes apply as you make them, except the connection, which applies when you select **Connect**.
 
-**History** lists shared history from the server, newest first, filtered by device and source. Select a dictation to read its transcript and the original one, copy it, delete it from the server, or open its audio in your default player. **Load older** fetches the next 50.
+**History** lists shared history from the server, newest first, filtered by device and source. Select a dictation to read its transcript and the original one, copy it, delete it from the server, or open its audio in your default player. **Delete audio** removes a recording's audio and keeps its text. A failed or cancelled take whose audio is still on the server has **Transcribe again**. **Load older** fetches the next 50.
 
 | Page       | Setting                    | Notes                                                                                                                                                |
 | ---------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Microphone | Choose input               | "System default", or a specific input. If the chosen microphone is unplugged, the default is used. **Next dictation** shows which one will record.   |
 | This PC    | Server address             | Defaults to `http://127.0.0.1:8391`. HTTPS works anywhere. Plain HTTP is only allowed for localhost and Tailscale IPs, matching the Mac app.         |
-| This PC    | Access token               | Stored in Windows Credential Manager, scoped to this server address. It is never written to the config file.                                         |
+| This PC    | Access token               | Paste the server's admin token once. Inlay swaps it for this PC's own revocable credential, kept in Windows Credential Manager for this address.     |
 | This PC    | Device name                | Shown in shared history. Defaults to the computer name.                                                                                              |
 | This PC    | Dictation key              | Right Ctrl (default), Right Alt, Right Shift, Scroll Lock, Pause, or F13–F24. Right Alt is AltGr on UK and many European layouts, so avoid it there. |
 | This PC    | Start Inlay when I sign in | Adds `Inlay` to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.                                                                                |
 
-**Connect** saves the address, token and device name, then checks the server. The status beside it, on the Dictation page and at the foot of the sidebar shows the result. A server on WSL is reachable from Windows at `http://127.0.0.1:8391`.
+**Connect** saves the address, token and device name, then checks the server. With the admin token, that check enrolls this PC (`POST /v1/devices/enroll`) and replaces the token with the credential the server returns, as the Mac app does. The admin token itself can only enroll devices. If the server refuses a token, Inlay checks again once a minute instead of every five seconds, so it doesn't trip the server's sign-in throttle. The status beside it, on the Dictation page and at the foot of the sidebar shows the result. A server on WSL is reachable from Windows at `http://127.0.0.1:8391`.
 
-Shared settings (language, dictionary, proofreading and original-audio retention) belong to the server. Edit them from the Mac app or the API. Each take uses the server's settings snapshot from when it started.
+Shared settings (language, dictionary, proofreading, original audio and how long audio is kept) belong to the server. Edit them from the Mac app or the API. Each take uses the server's settings snapshot from when it started.
 
 Files:
 
 - `%APPDATA%\Inlay\config.json` holds the server address, a stable device ID, the device name, the microphone and the hold key.
 - `%APPDATA%\Inlay\inlay.log` records events and errors. It never records transcripts, tokens or audio.
 - Set `INLAY_CLIENT_DATA_DIR` to use another folder, for example for a test copy. The token is scoped to the folder too.
+- The server lists each enrolled PC under its device ID. The Mac app's device list can revoke it.
 
 ## How a take works
 
 The flow matches the Mac client and [`docs/client-server-contract.md`](../docs/client-server-contract.md):
 
-1. On an accepted hold, the client checks `/v1/health` (API version 2 and readiness) and creates a generation with a new `requestID`, the device identity and `mode: "dictation"`. If admission fails, it doesn't open the microphone. Test microphone uses `mode: "test"`, pastes nothing, and reports `tested`.
+1. On an accepted hold, the client checks `/v1/health` (API version 4 and readiness) and creates a generation with a new `requestID`, the device identity and `mode: "dictation"`. If admission fails, it doesn't open the microphone. Test microphone uses `mode: "test"`, pastes nothing, and reports `tested`.
 2. It records from the chosen microphone in shared mode. It downmixes to mono and resamples to 16 kHz float32 with a windowed-sinc filter.
 3. While recording, it uploads half-second chunks in sequence and waits for each acknowledgement. When the server snapshot has `keepOriginalAudio`, the same 16 kHz audio is also uploaded as the `original` stream.
 4. On release, it finishes with the exact frame counts, then follows the NDJSON events until the generation completes.
