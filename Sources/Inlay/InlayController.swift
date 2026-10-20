@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import InlayAPI
 import InlayCore
+import Network
 import ServiceManagement
 
 private enum DictationDestination: Equatable {
@@ -19,7 +20,10 @@ enum InsertionMode {
 
 @MainActor
 final class InlayController: ObservableObject {
-    @Published var activity: DictationActivity = .idle
+    @Published var activity: DictationActivity = .idle {
+        // A server switch waits for capture to end, then applies at once.
+        didSet { if oldValue.isCapturing, !activity.isCapturing, applyProbes() { refreshServerData() } }
+    }
     let recordingFeedback = RecordingFeedback()
     @Published var recordingListHint: String?
     @Published private(set) var recordingInputName: String?
@@ -84,6 +88,11 @@ final class InlayController: ObservableObject {
     @Published var statusMessage = "Connecting to server…"
     @Published private(set) var hudProgressText: String?
     @Published private(set) var serverHealth: ServerHealth?
+    /// The server that history, shared settings and new takes use. It follows
+    /// health checks but never changes while the microphone is capturing.
+    @Published private(set) var activeEndpoint = ClientPreferencesStore.defaultEndpoint
+    /// Each listed server's latest health check, keyed by endpoint address.
+    @Published private(set) var serverProbes: [String: ServerProbe] = [:]
     @Published private(set) var serverStatusMessage = "Connecting…"
     @Published private(set) var isCheckingServer = false
     @Published private(set) var isSavingPreferences = false
@@ -108,7 +117,7 @@ final class InlayController: ObservableObject {
             return try client()
         },
         isDictationBusy: { [weak self] in self?.isBusy ?? true },
-        endpoint: { [weak self] in self?.preferences.endpoint ?? "" },
+        endpoint: { [weak self] in self?.activeEndpoint ?? "" },
         onHistoryChanged: { [weak self] isCurrentRevision in
             guard let self else { return }
             if isCurrentRevision, historySourceFilter != "wispr-flow" {
@@ -170,7 +179,10 @@ final class InlayController: ObservableObject {
     private var uploadTask: Task<UploadOutcome, Error>?
     private var uploadPipe: AudioChunkPipe?
     private var refreshTask: Task<Void, Never>?
+    private var queuedCheck: Bool?
+    private var dataTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
+    private var pathMonitor: NWPathMonitor?
     private var hudTask: Task<Void, Never>?
     private var permissionTask: Task<Void, Never>?
     private var shortcutCheckTask: Task<Void, Never>?
@@ -208,6 +220,7 @@ final class InlayController: ObservableObject {
     private var destinationTask: InsertionDestinationCapture?
     private var recordingClipboardChangeCount = 0
     private struct ContinuationAnchor {
+        let server: String
         let destination: DictationDestination
         let generationID: UUID
         let continuation: DictationContinuation
@@ -233,6 +246,7 @@ final class InlayController: ObservableObject {
         self.audioDevices = audioDevices ?? AudioDeviceStore()
         self.serverClientFactory = serverClient
         preferences = ClientPreferencesStore(root: configuration.url.deletingLastPathComponent())
+        activeEndpoint = preferences.endpoints.first ?? ClientPreferencesStore.defaultEndpoint
         let loadedPendingStore = PendingGenerationsStore(root: configuration.url.deletingLastPathComponent())
         pendingStore = loadedPendingStore
         pendingEntries = loadedPendingStore.load()
@@ -250,6 +264,7 @@ final class InlayController: ObservableObject {
         bindServices()
         self.audioDevices.start()
         installLifecycleObservers()
+        startPathMonitor()
         refreshPermissions()
         // Capture files are temporary only; server history is never examined here.
         CapturedAudio.cleanupOrphans()
@@ -281,34 +296,127 @@ final class InlayController: ObservableObject {
         applyingConfiguration = false
     }
 
-    private func client() throws -> ServerClient {
-        try serverClientFactory?() ?? ServerClient(endpoint: preferences.endpoint, token: preferences.token)
+    private func client(for endpoint: String? = nil) throws -> ServerClient {
+        let endpoint = endpoint ?? activeEndpoint
+        return try serverClientFactory?() ?? ServerClient(endpoint: endpoint, token: preferences.token(for: endpoint))
     }
 
     func refreshServer() {
-        refreshTask?.cancel()
         refreshTask = Task { [weak self] in await self?.checkServer(refreshData: true) }
     }
 
+    /// Checks every listed server in parallel, then picks the active one.
+    /// History loads and pending recovery run separately, so a slow server
+    /// never delays failover or the dictation key.
     private func checkServer(refreshData: Bool) async {
-        guard !isCheckingServer, !isShuttingDown else { return }
+        guard !isShuttingDown else { return }
+        guard !isCheckingServer else {
+            // A save or network change during a check must still be seen.
+            queuedCheck = (queuedCheck ?? false) || refreshData
+            return
+        }
         isCheckingServer = true
-        let endpoint = preferences.endpoint
-        defer { isCheckingServer = false }
-        do {
-            let connection = try client()
-            let health = try await connection.health()
-            guard endpoint == preferences.endpoint, !Task.isCancelled else { return }
-            serverHealth = health
-            serverStatusMessage = health.apiVersion != InlayAPI.version ? "Server API version is incompatible"
-                : (health.ready ? "Server online" : (health.message ?? "Server models are not ready"))
-            if !isBusy, activity == .idle { statusMessage = isServerReady ? "Ready when you are" : serverStatusMessage }
-            if refreshData {
+        defer {
+            isCheckingServer = false
+            if let queued = queuedCheck {
+                queuedCheck = nil
+                refreshTask = Task { [weak self] in await self?.checkServer(refreshData: queued) }
+            }
+        }
+        let endpoints = preferences.endpoints
+        let probes = await probeServers(endpoints)
+        guard endpoints == preferences.endpoints, !Task.isCancelled, !isShuttingDown else { return }
+        serverProbes = probes
+        if !isBusy {
+            var enrolled = false
+            for endpoint in endpoints where probes[endpoint]?.needsEnrollment == true {
+                if await enrollThisDevice(at: endpoint) { enrolled = true }
+            }
+            if enrolled { queuedCheck = true; return }
+        }
+        if applyProbes() || refreshData { refreshServerData() }
+        Task { [weak self] in await self?.reconcilePendingGenerations() }
+    }
+
+    private func probeServers(_ endpoints: [String]) async -> [String: ServerProbe] {
+        let connections = endpoints.map { endpoint in
+            (endpoint, Result { try serverClientFactory?() ?? ServerClient(
+                endpoint: endpoint, token: preferences.token(for: endpoint), session: ServerClient.probeSession) })
+        }
+        return await withTaskGroup(of: (String, ServerProbe).self) { group in
+            for (endpoint, connection) in connections {
+                group.addTask {
+                    do { return (endpoint, ServerProbe(health: try await connection.get().health())) }
+                    catch { return (endpoint, ServerProbe(error: error)) }
+                }
+            }
+            var probes: [String: ServerProbe] = [:]
+            for await (endpoint, probe) in group { probes[endpoint] = probe }
+            return probes
+        }
+    }
+
+    /// Moves to the first ready server unless a take is capturing, then
+    /// updates status. Returns true when the active server changed.
+    @discardableResult
+    private func applyProbes() -> Bool {
+        let endpoints = preferences.endpoints
+        let preferred = ServerFailover.preferred(endpoints, probes: serverProbes)
+        var target = endpoints.contains(activeEndpoint) ? activeEndpoint : endpoints.first ?? activeEndpoint
+        if !isCapturing, let preferred { target = preferred }
+        let switched = target != activeEndpoint
+        if switched {
+            activeEndpoint = target
+            resetServerData()
+        }
+        let probe = serverProbes[activeEndpoint]
+        serverHealth = probe?.health
+        if let probe {
+            if probe.isReady {
+                serverStatusMessage = activeEndpoint == endpoints.first ? "Server online"
+                    : "Using fallback: \(ServerFailover.displayName(activeEndpoint))"
+            } else if let preferred {
+                // Only while capturing; otherwise the switch above has already happened.
+                serverStatusMessage = "Switching to \(ServerFailover.displayName(preferred)) after this take"
+            } else if endpoints.count > 1 {
+                serverStatusMessage = "No server is ready · Recording unavailable"
+            } else {
+                serverStatusMessage = probe.problem ?? "Server models are not ready"
+            }
+        }
+        if !isBusy, activity == .idle { statusMessage = isServerReady ? "Ready when you are" : serverStatusMessage }
+        return switched
+    }
+
+    /// History, shared settings, devices and list continuation all belong to one server.
+    private func resetServerData() {
+        continuationAnchors.removeAll()
+        dataTask?.cancel()
+        detailTask?.cancel()
+        sharedPreferences = nil
+        storageUsage = nil
+        generations = []
+        generationDetail = nil
+        generationDetailFailedID = nil
+        historyCursor = nil
+        hasMoreHistory = false
+        devices = []
+        legacyEnrollmentClosed = false
+    }
+
+    private func refreshServerData() {
+        let endpoint = activeEndpoint
+        guard serverProbes[endpoint]?.isReachable == true else { return }
+        dataTask?.cancel()
+        dataTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let connection = try client(for: endpoint)
                 let source = historySourceFilter
                 async let settings = connection.preferences()
                 async let page = connection.history(source: source == "all" ? nil : source)
                 let (saved, history) = try await (settings, page)
-                guard endpoint == preferences.endpoint, source == historySourceFilter, !Task.isCancelled else { return }
+                guard endpoint == activeEndpoint, source == historySourceFilter, !Task.isCancelled else { return }
                 sharedPreferences = saved
                 if generations.count > history.items.count, history.nextCursor != nil,
                    let oldest = history.items.last?.createdAt {
@@ -320,41 +428,25 @@ final class InlayController: ObservableObject {
                     historyCursor = history.nextCursor
                     hasMoreHistory = history.nextCursor != nil
                 }
-            }
-            if refreshData { await refreshDevices() }
-            await reconcilePendingGenerations()
-        } catch is CancellationError {
-        } catch {
-            guard endpoint == preferences.endpoint, !Task.isCancelled else { return }
-            if let clientError = error as? ServerClientError,
-               case .rejected(let status, _, let code) = clientError,
-               status == 403, code == "enrollment_required", !isBusy,
-               await enrollThisDevice() {
-                refreshServer()
-                return
-            }
-            serverHealth = nil
-            serverStatusMessage = Self.connectionMessage(error)
-            if !isBusy, activity == .idle { statusMessage = serverStatusMessage }
+                await refreshDevices()
+            } catch {}
         }
     }
 
-    func saveConnection(endpoint: String, token: String, deviceName: String) {
+    func saveConnection(servers: [(endpoint: String, token: String)], deviceName: String) {
         guard !isBusy, !wisprImport.isImportRunning else { return }
-        guard preferences.save(endpoint: endpoint, token: token, deviceName: deviceName) else {
+        guard preferences.save(servers: servers, deviceName: deviceName) else {
             errorMessage = preferences.errorMessage
             return
         }
-        continuationAnchors.removeAll()
-        // Renaming or re-entering a token for the same server keeps its pending results.
-        pendingEntries.removeAll { $0.endpoint != preferences.endpoint }
+        // Renaming, reordering or re-entering a token keeps results owed by servers still listed.
+        pendingEntries.removeAll { !preferences.endpoints.contains($0.endpoint) }
         undeliveredResults.removeAll { result in !pendingEntries.contains { $0.id == result.id } }
         pendingStore.save(pendingEntries)
+        activeEndpoint = preferences.endpoints.first ?? ClientPreferencesStore.defaultEndpoint
+        resetServerData()
+        serverProbes = [:]
         serverHealth = nil
-        sharedPreferences = nil
-        generations = []
-        historyCursor = nil
-        hasMoreHistory = false
         serverStatusMessage = "Connecting…"
         refreshServer()
     }
@@ -363,10 +455,10 @@ final class InlayController: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let endpoint = preferences.endpoint
+                let endpoint = activeEndpoint
                 let source = historySourceFilter
                 let page = try await client().history(source: source == "all" ? nil : source)
-                guard endpoint == preferences.endpoint, source == historySourceFilter else { return }
+                guard endpoint == activeEndpoint, source == historySourceFilter else { return }
                 generations = page.items
                 historyCursor = page.nextCursor
                 hasMoreHistory = page.nextCursor != nil
@@ -381,10 +473,10 @@ final class InlayController: ObservableObject {
             guard let self else { return }
             defer { isLoadingHistory = false }
             do {
-                let endpoint = preferences.endpoint
+                let endpoint = activeEndpoint
                 let source = historySourceFilter
                 let page = try await client().history(before: cursor, source: source == "all" ? nil : source)
-                guard endpoint == preferences.endpoint, historyCursor == cursor, source == historySourceFilter else { return }
+                guard endpoint == activeEndpoint, historyCursor == cursor, source == historySourceFilter else { return }
                 let existing = Set(generations.map(\.id))
                 generations += page.items.filter { !existing.contains($0.id) }
                 historyCursor = page.nextCursor
@@ -409,29 +501,30 @@ final class InlayController: ObservableObject {
             guard let self else { return }
             defer { isSavingPreferences = false }
             do {
-                let endpoint = preferences.endpoint
+                let endpoint = activeEndpoint
                 let saved = try await client().updatePreferences(.init(revision: expectedRevision ?? snapshot.revision, preferences: value))
-                guard endpoint == preferences.endpoint else { return }
+                guard endpoint == activeEndpoint else { return }
                 sharedPreferences = saved
                 errorMessage = nil
             } catch { errorMessage = error.localizedDescription; refreshServer() }
         }
     }
 
-    private func enrollThisDevice() async -> Bool {
-        guard let connection = try? client() else { return false }
-        let endpoint = preferences.endpoint
+    private func enrollThisDevice(at endpoint: String) async -> Bool {
+        guard let connection = try? client(for: endpoint) else { return false }
         do {
             let response = try await connection.enroll(
                 device: DeviceIdentity(id: preferences.deviceID, name: preferences.deviceName))
-            // A connection change mid-enroll must not store the old server's token under the new one.
-            guard endpoint == preferences.endpoint else { return false }
-            return preferences.replaceToken(response.token)
+            // A server removed mid-enroll must not have its new token stored.
+            guard preferences.endpoints.contains(endpoint) else { return false }
+            return preferences.replaceToken(response.token, for: endpoint)
         } catch { return false }
     }
 
     func refreshDevices() async {
-        guard let connection = try? client(), let list = try? await connection.devices() else { return }
+        let endpoint = activeEndpoint
+        guard let connection = try? client(), let list = try? await connection.devices(),
+              endpoint == activeEndpoint else { return }
         devices = list.devices
         legacyEnrollmentClosed = list.legacyEnrollmentClosed
     }
@@ -503,9 +596,11 @@ final class InlayController: ObservableObject {
     @discardableResult
     func completeLocalSetup() -> Bool {
         guard !isBusy, let token = localServer.adminToken() else { return false }
-        saveConnection(endpoint: ClientPreferencesStore.defaultEndpoint,
-                       token: token, deviceName: preferences.deviceName)
-        guard preferences.token == token else { return false }
+        let local = ClientPreferencesStore.defaultEndpoint
+        // The local server goes first; other servers stay as fallbacks.
+        let others = preferences.endpoints.filter { $0 != local }.map { ($0, preferences.token(for: $0)) }
+        saveConnection(servers: [(local, token)] + others, deviceName: preferences.deviceName)
+        guard preferences.token(for: local) == token else { return false }
         refreshServer()
         return true
     }
@@ -565,22 +660,7 @@ final class InlayController: ObservableObject {
         }
     }
 
-    private static func connectionMessage(_ error: Error) -> String {
-        if let urlError = error as? URLError {
-            switch urlError.code {
-            case .cannotFindHost, .dnsLookupFailed:
-                return "Server not found at this address · Recording unavailable"
-            case .timedOut:
-                return "Server connection timed out · Recording unavailable"
-            case .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
-                 .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .clientCertificateRejected:
-                return "Secure connection to the server failed · Recording unavailable"
-            default:
-                return "Server offline · Recording unavailable"
-            }
-        }
-        return error.localizedDescription
-    }
+    private static func connectionMessage(_ error: Error) -> String { ServerProbe.message(for: error) }
 
     func toggleTestRecording() {
         guard !hotkey.isHoldingFn else { return }
@@ -658,11 +738,11 @@ final class InlayController: ObservableObject {
         refreshHistory()
     }
 
-    private func addPendingEntry(id: UUID, finish: FinishGenerationRequest,
+    private func addPendingEntry(id: UUID, endpoint: String, finish: FinishGenerationRequest,
                                  fallback: FinishGenerationRequest?, isTest: Bool) {
         pendingEntries.removeAll { $0.id == id }
         pendingEntries.append(PendingGenerationEntry(
-            id: id, endpoint: preferences.endpoint,
+            id: id, endpoint: endpoint,
             inferenceFrames: finish.inferenceFrames, originalFrames: finish.originalFrames,
             fallbackInferenceFrames: fallback?.inferenceFrames, isTest: isTest, sealedAt: Date()))
         pendingStore.save(pendingEntries)
@@ -696,15 +776,17 @@ final class InlayController: ObservableObject {
         let cutoff = Date().addingTimeInterval(-7 * 24 * 60 * 60)
         let stale = pendingEntries.filter { $0.sealedAt < cutoff }
         for entry in stale { removePendingEntry(entry.id) }
-        guard let connection = try? client() else { return }
         // Takes this session still owns deliver themselves; never offer them for copy.
         func isLive(_ id: UUID) -> Bool { pendingDictations.contains { $0.id == id } }
-        // A connection change during the read drops or re-scopes entries; skip those.
+        // A connection change during the read drops entries; skip those.
         func isCurrent(_ entry: PendingGenerationEntry) -> Bool {
-            entry.endpoint == preferences.endpoint && pendingEntries.contains { $0.id == entry.id }
+            preferences.endpoints.contains(entry.endpoint) && pendingEntries.contains { $0.id == entry.id }
         }
-        for entry in pendingEntries where isCurrent(entry) && !isLive(entry.id) {
-            guard let record = try? await connection.generation(entry.id),
+        // Each take is recovered from the server that holds it, once that server answers.
+        for entry in pendingEntries where isCurrent(entry) && !isLive(entry.id)
+            && serverProbes[entry.endpoint]?.isReachable == true {
+            guard let connection = try? client(for: entry.endpoint),
+                  let record = try? await connection.generation(entry.id),
                   isCurrent(entry), !isLive(entry.id) else { continue }
             switch record.status {
             case .completed:
@@ -732,6 +814,7 @@ final class InlayController: ObservableObject {
     }
 
     func copyUndeliveredResult(_ record: GenerationRecord) {
+        let endpoint = pendingEntries.first { $0.id == record.id }?.endpoint
         switch DictationClipboard.copy(record.finalText, to: .general) {
         case .success:
             lastTranscript = record.finalText
@@ -739,7 +822,7 @@ final class InlayController: ObservableObject {
             lastDeliveryStatus = .copied
             removePendingEntry(record.id)
             Task { [weak self] in
-                guard let connection = try? self?.client() else { return }
+                guard let endpoint, let connection = try? self?.client(for: endpoint) else { return }
                 try? await connection.delivery(record.id, receipt: DeliveryReceipt(
                     status: "copied", message: "Copied after relaunch"))
             }
@@ -788,7 +871,8 @@ final class InlayController: ObservableObject {
         resetSession()
         if let generation, let connection { Task { try? await connection.cancel(generation) } }
         stopPendingDictations()
-        monitorTask?.cancel(); refreshTask?.cancel(); hudTask?.cancel(); permissionTask?.cancel()
+        monitorTask?.cancel(); refreshTask?.cancel(); dataTask?.cancel(); hudTask?.cancel(); permissionTask?.cancel()
+        pathMonitor?.cancel()
         configuration.stopWatching()
         subscriptions.removeAll()
         audioDevices.stop(); hotkey.stop(); continuationAnchors.removeAll()
@@ -869,9 +953,21 @@ final class InlayController: ObservableObject {
             guard let self else { return }
             defer { if sessionID == current { microphoneStartTask = nil } }
             do {
-                let connection = try client()
-                let created = try await connection.create(.init(requestID: current,
-                    device: .init(id: preferences.deviceID, name: preferences.deviceName), mode: isTest ? .test : .dictation))
+                let request = CreateGenerationRequest(requestID: current,
+                    device: .init(id: preferences.deviceID, name: preferences.deviceName), mode: isTest ? .test : .dictation)
+                var connection = try client()
+                let created: GenerationRecord
+                do { created = try await connection.create(request) }
+                catch {
+                    // Admission precedes the microphone, so one retry on the next
+                    // ready server loses nothing. The switch itself waits for the take to end.
+                    guard ServerProbe.isUnavailable(error), sessionID == current, !Task.isCancelled else { throw error }
+                    serverProbes[connection.address] = ServerProbe(error: error)
+                    applyProbes()
+                    guard let next = ServerFailover.preferred(preferences.endpoints, probes: serverProbes) else { throw error }
+                    connection = try client(for: next)
+                    created = try await connection.create(request)
+                }
                 guard sessionID == current, activity == .starting, !Task.isCancelled else {
                     Task { try? await connection.cancel(created.id) }; return
                 }
@@ -1025,11 +1121,12 @@ final class InlayController: ObservableObject {
                 // An earlier take that is unresolved or shares this anchor suppresses it.
                 let sharesEarlierAnchor = pendingDictations.prefix { $0 !== pending }
                     .contains { earlier in earlier.target.map { $0.anchor == anchor } ?? true }
-                finish.continuationID = sharesEarlierAnchor ? nil : anchor.flatMap { self.continuation(for: $0)?.generationID }
+                finish.continuationID = sharesEarlierAnchor ? nil
+                    : anchor.flatMap { self.continuation(for: $0, server: connection.address)?.generationID }
                 fallback?.continuationID = finish.continuationID
                 try Task.checkCancellation()
                 pending.sealed = true // The server may accept a seal whose response is interrupted.
-                addPendingEntry(id: id, finish: finish, fallback: fallback, isTest: test)
+                addPendingEntry(id: id, endpoint: connection.address, finish: finish, fallback: fallback, isTest: test)
                 var result: GenerationRecord
                 do { result = try await Self.seal(connection, id: id, finish: finish, fallback: fallback) }
                 catch let ServerClientError.rejected(status, message, code) where (400..<500).contains(status) && ![408, 429].contains(status) {
@@ -1053,8 +1150,8 @@ final class InlayController: ObservableObject {
                 await waitForCaptureRelease()
                 try Task.checkCancellation()
                 let deliveryDestination = rebasedDestination(resolved)
-                var receipt = await deliver(result, to: deliveryDestination, anchor: anchor, isTest: test,
-                                            clipboardCount: clipboardCount, session: current)
+                var receipt = await deliver(result, from: connection.address, to: deliveryDestination, anchor: anchor,
+                                            isTest: test, clipboardCount: clipboardCount, session: current)
                 if truncated, receipt.status == DictationDeliveryStatus.copied.rawValue {
                     let message = "Recording was interrupted. The saved part was copied to the clipboard."
                     receipt.message = message
@@ -1102,7 +1199,8 @@ final class InlayController: ObservableObject {
                         statusMessage = "Still processing on the server"
                     }
                 } else if sessionID == current {
-                    if error is URLError { serverHealth = nil; serverStatusMessage = Self.connectionMessage(error) }
+                    // Only the take's own server is marked down; it may no longer be the active one.
+                    if error is URLError { serverProbes[connection.address] = ServerProbe(error: error); applyProbes() }
                     showError(Self.connectionMessage(error))
                 } else {
                     let message = "Earlier dictation failed: \(Self.connectionMessage(error))"
@@ -1152,7 +1250,7 @@ final class InlayController: ObservableObject {
         }
     }
 
-    private func deliver(_ record: GenerationRecord, to destination: InsertionDestination,
+    private func deliver(_ record: GenerationRecord, from server: String, to destination: InsertionDestination,
                          anchor: DictationDestination?, isTest: Bool, clipboardCount: Int,
                          session: UUID) async -> DeliveryReceipt {
         var transcript = record.previewText.isEmpty ? record.finalText : record.previewText
@@ -1160,7 +1258,7 @@ final class InlayController: ObservableObject {
         let deliveryStatus: DictationDeliveryStatus
         let status: String
         if isTest {
-            rememberContinuation(record, at: .test)
+            rememberContinuation(record, from: server, at: .test)
             message = "Test complete. Nothing was pasted."
             deliveryStatus = .tested
             status = record.finalText.isEmpty ? "No speech detected" : "Ready to copy"
@@ -1168,7 +1266,7 @@ final class InlayController: ObservableObject {
             if record.continuation == nil && record.previewText.isEmpty {
                 message = "No speech detected"; deliveryStatus = .none
             } else if let confirmed = TextInserter.unchangedAnchor(destination.target) {
-                rememberContinuation(record, at: .field(confirmed))
+                rememberContinuation(record, from: server, at: .field(confirmed))
                 message = "List updated. Nothing was pasted."; deliveryStatus = .listUpdated
             } else {
                 message = "List state unchanged: the original cursor could not be confirmed."
@@ -1191,7 +1289,7 @@ final class InlayController: ObservableObject {
                     if let original = destination.target {
                         insertionRebases.inserted(at: original, confirmed: target)
                     }
-                    rememberContinuation(record, at: .field(target))
+                    rememberContinuation(record, from: server, at: .field(target))
                 }
                 message = "Inserted at your cursor"; deliveryStatus = .inserted; status = "Inserted"
             case .copied(let reason):
@@ -1238,23 +1336,26 @@ final class InlayController: ObservableObject {
         insertionRebases.removeAll()
     }
 
-    private func continuation(for destination: DictationDestination) -> ContinuationAnchor? {
+    /// A continuation only means something to the server that produced it.
+    private func continuation(for destination: DictationDestination, server: String) -> ContinuationAnchor? {
         let now = ProcessInfo.processInfo.systemUptime
         continuationAnchors.removeAll { now < $0.timestamp || now - $0.timestamp >= 15 * 60 }
-        return continuationAnchors.last { $0.destination == destination }
+        return continuationAnchors.last { $0.destination == destination && $0.server == server }
     }
 
     private func prepareContinuation(for destination: DictationDestination?) {
-        if let destination, let list = continuation(for: destination)?.continuation.list {
+        if let destination, let list = continuation(for: destination, server: activeEndpoint)?.continuation.list {
             recordingListHint = list.style == .numbered ? "Continuing at item \(list.nextNumber)" : "Continuing your list"
         } else { recordingListHint = nil }
     }
 
-    private func rememberContinuation(_ record: GenerationRecord, at destination: DictationDestination) {
+    private func rememberContinuation(_ record: GenerationRecord, from server: String,
+                                      at destination: DictationDestination) {
         continuationAnchors.removeAll { $0.destination == destination }
-        guard let continuation = record.continuation else { return }
-        continuationAnchors.append(.init(destination: destination, generationID: record.id, continuation: continuation,
-                                         timestamp: ProcessInfo.processInfo.systemUptime))
+        // A take that finishes after a switch must not anchor the next take to its old server.
+        guard let continuation = record.continuation, server == activeEndpoint else { return }
+        continuationAnchors.append(.init(server: server, destination: destination, generationID: record.id,
+                                         continuation: continuation, timestamp: ProcessInfo.processInfo.systemUptime))
         continuationAnchors = Array(continuationAnchors.suffix(8))
     }
 
@@ -1289,6 +1390,9 @@ final class InlayController: ObservableObject {
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) {
             [weak self] _ in MainActor.assumeIsolated { self?.refreshPermissions(); self?.refreshServer() }
         })
+        workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) {
+            [weak self] _ in MainActor.assumeIsolated { self?.refreshServer() }
+        })
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.willPowerOffNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) {
                 [weak self] _ in MainActor.assumeIsolated { self?.restForSystem() }
@@ -1297,6 +1401,17 @@ final class InlayController: ObservableObject {
         lockObserver = DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) {
             [weak self] _ in MainActor.assumeIsolated { self?.restForSystem() }
         }
+    }
+
+    /// Joining or leaving a network can change which server is reachable;
+    /// check at once instead of waiting for the next periodic check.
+    private func startPathMonitor() {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshServer() }
+        }
+        monitor.start(queue: DispatchQueue(label: "dev.davis.inlay.network-path"))
+        pathMonitor = monitor
     }
 
     private func restForSystem() {

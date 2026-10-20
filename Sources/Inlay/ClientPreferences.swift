@@ -4,21 +4,26 @@ import Foundation
 import Security
 import InlayCore
 
-/// Only this Mac's identity and connection live here. Generation state and
+/// Only this Mac's identity and connections live here. Generation state and
 /// processing preferences belong to the server.
 @MainActor
 final class ClientPreferencesStore: ObservableObject {
     static let defaultEndpoint = "http://127.0.0.1:8391"
+    static let maximumEndpoints = 5
     private struct Settings: Codable {
-        var endpoint: String
+        var endpoints: [String]?
+        /// Single-server files from before failover; read once, then rewritten as `endpoints`.
+        var endpoint: String?
         var deviceID: String
         var deviceName: String
     }
 
-    @Published private(set) var endpoint: String
+    /// Servers in priority order. The controller picks the active one from their health.
+    @Published private(set) var endpoints: [String]
     @Published private(set) var deviceID: String
     @Published private(set) var deviceName: String
-    @Published private(set) var token: String
+    /// Keyed by endpoint address. Each credential is only ever sent to its own server.
+    @Published private(set) var tokens: [String: String]
     @Published private(set) var errorMessage: String?
     private let url: URL
     private let credentialAccount: String
@@ -28,76 +33,117 @@ final class ClientPreferencesStore: ObservableObject {
         url = root.appendingPathComponent("client.json")
         credentialAccount = root.standardizedFileURL.path
         let saved = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(Settings.self, from: $0) }
-        let resolvedEndpoint = environment["INLAY_SERVER_URL"] ?? saved?.endpoint ?? Self.defaultEndpoint
-        endpoint = resolvedEndpoint
+        let savedEndpoints = Self.normalized(saved?.endpoints ?? saved?.endpoint.map { [$0] } ?? [])
+        let resolved = environment["INLAY_SERVER_URL"].map { Self.normalized([$0]) }
+            ?? (savedEndpoints.isEmpty ? [Self.defaultEndpoint] : savedEndpoints)
+        endpoints = resolved
         deviceID = saved?.deviceID ?? UUID().uuidString.lowercased()
         deviceName = saved?.deviceName ?? Host.current().localizedName ?? "My Mac"
-        token = ""
-        do {
-            let validated = try ServerEndpoint(resolvedEndpoint)
-            endpoint = validated.address
-            let account = credentialAccount + "|" + validated.address
-            token = readCredential?(account) ?? Self.readToken(account: account)
-            if saved == nil { persist() }
-        } catch {
-            errorMessage = error.localizedDescription
+        tokens = [:]
+        if saved == nil, resolved.allSatisfy({ (try? ServerEndpoint($0)) != nil }) { persist() }
+        // Rewrite the saved list, never an INLAY_SERVER_URL override for this run.
+        else if saved?.endpoints == nil, !savedEndpoints.isEmpty { persist(savedEndpoints) }
+        for endpoint in resolved {
+            do {
+                _ = try ServerEndpoint(endpoint)
+                let account = credentialAccount + "|" + endpoint
+                tokens[endpoint] = readCredential?(account) ?? Self.readToken(account: account)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
+    func token(for endpoint: String) -> String { tokens[endpoint] ?? "" }
+
+    /// Normalizes valid addresses so they match their Keychain accounts. Invalid
+    /// entries stay as written so the connection form can show and fix them.
+    private static func normalized(_ values: [String]) -> [String] {
+        var result: [String] = []
+        for value in values {
+            let address = (try? ServerEndpoint(value).address) ?? value
+            if !result.contains(address) { result.append(address) }
+        }
+        return Array(result.prefix(maximumEndpoints))
+    }
+
     @discardableResult
-    func save(endpoint: String, token: String, deviceName: String) -> Bool {
-        let normalizedEndpoint: String
-        do { normalizedEndpoint = try ServerEndpoint(endpoint).address }
-        catch {
-            errorMessage = error.localizedDescription
+    func save(servers: [(endpoint: String, token: String)], deviceName: String) -> Bool {
+        guard (1...Self.maximumEndpoints).contains(servers.count) else {
+            errorMessage = "Add between 1 and \(Self.maximumEndpoints) servers."
             return false
+        }
+        var validated: [(endpoint: String, token: String)] = []
+        for (index, server) in servers.enumerated() {
+            let label = servers.count > 1 ? "Server \(index + 1): " : ""
+            let address: String
+            do { address = try ServerEndpoint(server.endpoint).address }
+            catch {
+                errorMessage = label + error.localizedDescription
+                return false
+            }
+            guard !validated.contains(where: { $0.endpoint == address }) else {
+                errorMessage = label + "This server is already in the list."
+                return false
+            }
+            let trimmedToken = server.token.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmedToken.utf8.count <= 4_096, !trimmedToken.contains(where: \.isWhitespace) else {
+                errorMessage = label + "Use a server token without whitespace, up to 4 KB."
+                return false
+            }
+            validated.append((address, trimmedToken))
         }
         let name = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.count <= 120 else {
             errorMessage = "Use a device name between 1 and 120 characters."
             return false
         }
-        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedToken.utf8.count <= 4_096, !trimmedToken.contains(where: \.isWhitespace) else {
-            errorMessage = "Use a server token without whitespace, up to 4 KB."
-            return false
-        }
         // Scope credentials to their exact endpoint so a failed settings write
         // or environment override cannot send one server's key to another.
-        guard Self.writeToken(trimmedToken, account: credentialAccount + "|" + normalizedEndpoint) else {
-            errorMessage = "The server credential could not be saved in Keychain."
+        for server in validated {
+            guard Self.writeToken(server.token, account: credentialAccount + "|" + server.endpoint) else {
+                errorMessage = "The server credential could not be saved in Keychain."
+                return false
+            }
+        }
+        let previous = (self.endpoints, self.deviceName, self.tokens)
+        self.endpoints = validated.map(\.endpoint)
+        self.deviceName = name
+        self.tokens = Dictionary(uniqueKeysWithValues: validated.map { ($0.endpoint, $0.token) })
+        guard persist() else {
+            (self.endpoints, self.deviceName, self.tokens) = previous
             return false
         }
-        let previous = (self.endpoint, self.deviceName, self.token)
-        self.endpoint = normalizedEndpoint
-        self.deviceName = name
-        self.token = trimmedToken
-        guard persist() else {
-            (self.endpoint, self.deviceName, self.token) = previous
-            return false
+        // Only after the list stops naming a server, so a failed write keeps its credential.
+        for removed in previous.0 where !self.endpoints.contains(removed) {
+            if let address = try? ServerEndpoint(removed).address {
+                Self.writeToken("", account: credentialAccount + "|" + address)
+            }
         }
         return true
     }
 
     @discardableResult
-    func replaceToken(_ newToken: String) -> Bool {
+    func replaceToken(_ newToken: String, for endpoint: String) -> Bool {
+        guard endpoints.contains(endpoint) else { return false }
         let trimmed = newToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.writeToken(trimmed, account: credentialAccount + "|" + endpoint) else {
             errorMessage = "The server credential could not be saved in Keychain."
             return false
         }
-        token = trimmed
+        tokens[endpoint] = trimmed
         return true
     }
 
     @discardableResult
-    private func persist() -> Bool {
+    private func persist(_ savedEndpoints: [String]? = nil) -> Bool {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(Settings(endpoint: endpoint, deviceID: deviceID, deviceName: deviceName))
+            let data = try encoder.encode(Settings(endpoints: savedEndpoints ?? endpoints, deviceID: deviceID,
+                                                   deviceName: deviceName))
             try data.write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             errorMessage = nil
@@ -124,6 +170,7 @@ final class ClientPreferencesStore: ObservableObject {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
+    @discardableResult
     private static func writeToken(_ token: String, account: String) -> Bool {
         let query = keychainQuery(account: account)
         if token.isEmpty {

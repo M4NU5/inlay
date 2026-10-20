@@ -121,7 +121,7 @@ struct ServerConnectionStatus: View {
                 .lineLimit(compact ? 2 : 1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if !compact {
-                Text(controller.preferences.endpoint)
+                Text(controller.activeEndpoint)
                     .font(.caption)
                     .foregroundStyle(InlayPalette.muted)
                     .lineLimit(1)
