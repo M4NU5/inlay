@@ -48,6 +48,8 @@ pub struct Dictation {
     /// What became of it, such as "Pasted at your cursor".
     pub outcome: String,
     pub seconds: f64,
+    /// From Test microphone, so nothing was pasted.
+    pub test: bool,
 }
 
 pub struct Status {
@@ -56,6 +58,8 @@ pub struct Status {
     /// The current recording is a microphone test, which never pastes.
     pub testing: bool,
     pub processing: usize,
+    /// Test takes recording or transcribing, for the Microphone page.
+    pub tests: usize,
     pub notice: Option<Notice>,
     pub last: Option<Dictation>,
     /// Why the latest take failed. Cleared when the next one starts.
@@ -83,6 +87,7 @@ impl App {
                 recording: false,
                 testing: false,
                 processing: 0,
+                tests: 0,
                 notice: None,
                 last: None,
                 error: None,
@@ -240,6 +245,22 @@ impl App {
             }
             self.update(|status| status.server = server);
         }
+    }
+}
+
+/// Counts a test take as running, from its start until its result is shown.
+pub struct TestTake(Arc<App>);
+
+impl App {
+    pub fn test_take(self: &Arc<Self>) -> TestTake {
+        self.update(|status| status.tests += 1);
+        TestTake(self.clone())
+    }
+}
+
+impl Drop for TestTake {
+    fn drop(&mut self) {
+        self.0.update(|status| status.tests -= 1);
     }
 }
 

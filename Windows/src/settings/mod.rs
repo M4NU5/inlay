@@ -88,6 +88,8 @@ pub struct Context {
     pub recording: bool,
     pub testing: bool,
     pub processing: bool,
+    /// A test take is recording or transcribing.
+    pub test_busy: bool,
     pub last: Option<Dictation>,
     pub error: Option<String>,
     pub microphones: Vec<String>,
@@ -380,12 +382,13 @@ fn refresh_microphones() {
 fn context() -> Context {
     let app = app::shared();
     let settings = app.settings();
-    let (server, recording, testing, processing, last, error) = app.status(|status| {
+    let (server, recording, testing, processing, test_busy, last, error) = app.status(|status| {
         (
             status.server.clone(),
             status.recording,
             status.testing,
             status.processing > 0,
+            status.tests > 0,
             status.last.clone(),
             status.error.clone(),
         )
@@ -397,6 +400,7 @@ fn context() -> Context {
         recording,
         testing,
         processing,
+        test_busy,
         last,
         error,
         microphones: state.microphones.clone(),

@@ -244,11 +244,7 @@ fn header(app: &App) -> Header {
     Header {
         state: state.into(),
         dot,
-        message: if ready {
-            format!("Hold {key} to dictate")
-        } else {
-            text
-        },
+        message: if ready { format!("Hold {key}") } else { text },
         ready,
     }
 }
@@ -320,7 +316,7 @@ fn show_menu(window: HWND) {
         Entry::Separator,
         item(ID_QUIT, "Quit Inlay", true),
     ];
-    menu::show(window, Some(header(app)), entries, px(300), Anchor::Cursor);
+    menu::show(window, Some(header(app)), entries, px(240), Anchor::Cursor);
 }
 
 fn quit(window: HWND) {

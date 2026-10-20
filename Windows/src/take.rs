@@ -60,6 +60,7 @@ pub fn start(id: u64, app: Arc<App>, test: bool) -> Handle {
     let thread = thread::Builder::new()
         .name(format!("take-{id}"))
         .spawn(move || {
+            let _test = test.then(|| app.test_take());
             app.set_recording(true, test);
             let released = record(&app, &inbox, &own, test);
             app.set_recording(false, test);
@@ -356,6 +357,7 @@ fn report_test(app: &App, record: &Generation, seconds: f64) -> (&'static str, S
         text,
         outcome: outcome.into(),
         seconds,
+        test: true,
     });
     ("tested", outcome.into())
 }
@@ -376,6 +378,7 @@ fn deliver(app: &App, record: &Generation, seconds: f64) -> (&'static str, Strin
             text: shown_text(record),
             outcome: outcome.into(),
             seconds,
+            test: false,
         })
     };
     if record.insertion_text.is_empty() {

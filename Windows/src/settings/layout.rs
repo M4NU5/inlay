@@ -620,6 +620,57 @@ impl Builder {
         }
     }
 
+    /// A card holding a block of text under a title, such as a transcript.
+    /// `aside` sits at the title's right, and `footer` under the text.
+    pub fn text_card(&mut self, title: &str, aside: &str, body: &str, colour: u32, footer: &str) {
+        let (left, right) = (self.left + px(INSET), self.right - px(INSET));
+        let top = self.y;
+        let header = RECT {
+            left,
+            top: top + px(4),
+            right,
+            bottom: top + px(44),
+        };
+        let height = theme::text_height(body, Font::Body, right - left, wrapped()).max(px(20));
+        let text = RECT {
+            left,
+            top: header.bottom + px(12),
+            right,
+            bottom: header.bottom + px(12) + height,
+        };
+        let below = if footer.is_empty() {
+            text.bottom + px(16)
+        } else {
+            text.bottom + px(40)
+        };
+        self.items.push(Item::Card(RECT {
+            left: self.left,
+            top,
+            right: self.right,
+            bottom: below,
+        }));
+        self.text(title, header, Font::Strong, theme::INK, DT_LEFT | LINE);
+        self.text(aside, header, Font::Small, theme::MUTED, DT_RIGHT | LINE);
+        self.items.push(Item::Rule(RECT {
+            top: header.bottom,
+            bottom: header.bottom + 1,
+            ..header
+        }));
+        self.text(body, text, Font::Body, colour, wrapped());
+        self.text(
+            footer,
+            RECT {
+                top: text.bottom + px(8),
+                bottom: below - px(10),
+                ..text
+            },
+            Font::Small,
+            theme::MUTED,
+            DT_LEFT | LINE | DT_END_ELLIPSIS,
+        );
+        self.y = below;
+    }
+
     /// A row of buttons. Primary buttons share the width the others leave.
     pub fn actions(&mut self, buttons: Vec<(i32, Control)>) {
         let area = self.band(px(ACTION_HEIGHT));
