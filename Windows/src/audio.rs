@@ -39,6 +39,13 @@ pub fn input_names() -> Vec<String> {
     }
 }
 
+/// The name of Windows' default input, if there is one.
+pub fn default_input_name() -> Option<String> {
+    cpal::default_host()
+        .default_input_device()
+        .map(|device| device.to_string())
+}
+
 pub struct Recording {
     stream: cpal::Stream,
     frames: Arc<AtomicU64>,

@@ -169,17 +169,19 @@ impl Api {
         send(self.request("GET", "v1/preferences"), Body::Empty).map(drop)
     }
 
-    /// Admission happens here, before the microphone opens.
+    /// Admission happens here, before the microphone opens. `mode` is
+    /// `dictation`, or `test` for a microphone test.
     pub fn create(
         &self,
         request_id: &str,
         device_id: &str,
         device_name: &str,
+        mode: &str,
     ) -> Result<Generation, ApiError> {
         let body = json!({
             "requestID": request_id,
             "device": { "id": device_id, "name": device_name },
-            "mode": "dictation",
+            "mode": mode,
         });
         decode(send(
             self.request("POST", "v1/generations"),
