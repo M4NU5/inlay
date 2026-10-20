@@ -1,7 +1,7 @@
 import InlayCore
 import SwiftUI
 
-private enum InlayPage: String, CaseIterable, Identifiable {
+enum InlayPage: String, CaseIterable, Identifiable {
     case dictation = "Dictation"
     case history = "History"
     case microphone = "Microphone"
@@ -22,7 +22,12 @@ private enum InlayPage: String, CaseIterable, Identifiable {
 
 struct InlayWindowView: View {
     @ObservedObject var controller: InlayController
-    @State private var page: InlayPage = .dictation
+    @State private var page: InlayPage
+
+    init(controller: InlayController, initialPage: InlayPage = .dictation) {
+        self.controller = controller
+        _page = State(initialValue: initialPage)
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -36,10 +41,11 @@ struct InlayWindowView: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 22)
 
-                List(InlayPage.allCases) { destination in
+                List(Array(InlayPage.allCases.enumerated()), id: \.element) { entry in
+                    let destination = entry.element
                     Button { page = destination } label: {
                         Label(destination.rawValue, systemImage: destination.symbol)
-                            .font(.system(size: 13, weight: page == destination ? .medium : .regular))
+                            .font(.callout.weight(page == destination ? .medium : .regular))
                             .foregroundStyle(page == destination ? InlayPalette.ink : InlayPalette.muted)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 10)
@@ -54,6 +60,7 @@ struct InlayWindowView: View {
                     .listRowBackground(Color.clear)
                     .accessibilityIdentifier("navigation.\(destination.id)")
                     .accessibilityAddTraits(page == destination ? .isSelected : [])
+                    .keyboardShortcut(KeyEquivalent(Character(String(entry.offset + 1))), modifiers: .command)
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
@@ -91,7 +98,7 @@ struct DevBadge: View {
     var body: some View {
         if InlayBuild.current.isDevelopment {
             Text("Dev")
-                .font(.system(size: 10, weight: .semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(InlayPalette.accentInk)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
@@ -107,7 +114,7 @@ struct ServerConnectionStatus: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            StatusDot(color: controller.isServerReady ? InlayPalette.success : InlayPalette.warning)
+            StatusDot(isReady: controller.isServerReady)
             Text(controller.serverStatusMessage)
                 .font(compact ? .caption : .callout)
                 .foregroundStyle(InlayPalette.ink)
@@ -140,8 +147,10 @@ struct DictationPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 HStack(spacing: 20) {
-                    InlayHoldKeyCap(key: controller.shortcut, isPressed: controller.isRecording)
-                    Text(controller.activationMode == .doubleTapToggle ? "Double tap to dictate." : "Hold to dictate.")
+                    InlayHoldKeyCap(key: controller.shortcut,
+                                    titleOverride: controller.customTriggerKeyCode.flatMap { HoldKey.customKeyTitle(CGKeyCode($0)) },
+                                    isPressed: controller.isRecording)
+                    Text("\(controller.activationMode.actionVerb.capitalized) to dictate.")
                         .font(.system(size: 28, weight: .medium))
                         .tracking(-0.7)
                     Spacer()
@@ -178,7 +187,7 @@ struct DictationPage: View {
                     .frame(height: 28)
                     Divider()
                     transcript
-                        .frame(height: 205)
+                        .frame(minHeight: 120, maxHeight: .infinity)
                         .accessibilityIdentifier("dictation.transcript")
                     Divider()
                     HStack {
@@ -203,7 +212,7 @@ struct DictationPage: View {
                 }
             }
             .padding(30)
-            .frame(maxWidth: 780)
+            .frame(maxWidth: InlayPageMetrics.contentWidth)
             .frame(maxWidth: .infinity, alignment: .top)
         }
     }
@@ -235,6 +244,20 @@ struct DictationPage: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            if !controller.undeliveredResults.isEmpty {
+                HStack {
+                    Text("A dictation finished while Inlay was closed.")
+                        .font(.callout)
+                        .foregroundStyle(InlayPalette.ink)
+                    Spacer()
+                    Button("Copy") {
+                        if let record = controller.undeliveredResults.first {
+                            controller.copyUndeliveredResult(record)
+                        }
+                    }
+                }
+                .padding(.vertical, 6)
+            }
             ScrollView {
                 Text(controller.lastTranscript.isEmpty ? "Your next thought will appear here." : controller.lastTranscript)
                     .font(.body)
@@ -243,6 +266,36 @@ struct DictationPage: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 10)
+            }
+        }
+    }
+}
+
+enum InlayPageMetrics {
+    static let contentWidth: CGFloat = 760
+    static let horizontalPadding: CGFloat = 28
+}
+
+/// The one page scaffold: flat canvas, a heading, then content capped at
+/// 760 pt and centered. Form pages pass their grouped Form as content;
+/// History (split list/detail) is the documented full-bleed exception.
+struct InlayPageScaffold<Content: View>: View {
+    var title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ZStack {
+            InlayPalette.canvas.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 0) {
+                InlayPageHeading(title: title)
+                    .frame(maxWidth: InlayPageMetrics.contentWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, InlayPageMetrics.horizontalPadding)
+                    .padding(.top, 28)
+                    .padding(.bottom, 8)
+                content
+                    .frame(maxWidth: InlayPageMetrics.contentWidth)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
     }
