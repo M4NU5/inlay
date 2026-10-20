@@ -22,7 +22,8 @@ pub enum Stop {
 
 pub type Notify = Arc<dyn Fn(Stop) + Send + Sync>;
 
-/// The loudness of the latest microphone buffer, 0 to 1, for the recording pill.
+/// The microphone's smoothed loudness, 0 to 1, for the recording pill. It
+/// matches the Mac client's meter: -68 to -18 dBFS, a fast rise and a slower fall.
 static LEVEL: AtomicU32 = AtomicU32::new(0);
 
 pub fn level() -> f32 {
@@ -87,6 +88,8 @@ pub fn start(
     let sink = Sink {
         channels: config.channels.max(1) as usize,
         resampler: Resampler::new(config.sample_rate),
+        rate: config.sample_rate as f32,
+        level: 0.0,
         mono: Vec::new(),
         chunks,
         frames: frames.clone(),
@@ -139,6 +142,8 @@ where
 struct Sink {
     channels: usize,
     resampler: Resampler,
+    rate: f32,
+    level: f32,
     mono: Vec<f32>,
     chunks: SyncSender<Vec<f32>>,
     frames: Arc<AtomicU64>,
@@ -168,9 +173,20 @@ impl Sink {
         if !self.mono.is_empty() {
             let power = self.mono.iter().map(|sample| sample * sample).sum::<f32>()
                 / self.mono.len() as f32;
-            // Speech sits far below full scale, so stretch the quiet end.
-            let level = (power.sqrt() * 4.0).sqrt().min(1.0);
-            LEVEL.store(level.to_bits(), Ordering::Relaxed);
+            let rms = power.sqrt();
+            let target = if rms > 0.0 {
+                ((20.0 * rms.log10() + 68.0) / 50.0).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            // Timing comes from the samples, not from how often buffers arrive.
+            let seconds = self.mono.len() as f32 / self.rate;
+            let constant = if target > self.level { 0.020 } else { 0.130 };
+            self.level += (target - self.level) * -(-seconds / constant).exp_m1();
+            if target == 0.0 && self.level < 0.02 {
+                self.level = 0.0;
+            }
+            LEVEL.store(self.level.to_bits(), Ordering::Relaxed);
         }
         let mut output = Vec::with_capacity(self.mono.len());
         self.resampler.process(&self.mono, &mut output);

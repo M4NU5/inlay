@@ -42,7 +42,9 @@ const VK_V: VIRTUAL_KEY = 0x56;
 /// release from opening the menu bar or the Start menu.
 const VK_MASK: VIRTUAL_KEY = 0xE8;
 
-pub fn paste(text: &str) -> Result<(), String> {
+/// Calls `sent` once the paste keystroke has gone out, before the clipboard
+/// is restored.
+pub fn paste(text: &str, sent: impl FnOnce()) -> Result<(), String> {
     let saved = snapshot()?;
     write_text(text, true)?;
     let staged = unsafe { GetClipboardSequenceNumber() };
@@ -61,6 +63,7 @@ pub fn paste(text: &str) -> Result<(), String> {
         "paste: sent {} to the foreground window",
         if terminal { "Ctrl+Shift+V" } else { "Ctrl+V" }
     );
+    sent();
     thread::sleep(RESTORE_DELAY);
     restore(&saved, staged);
     Ok(())
