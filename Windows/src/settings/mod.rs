@@ -6,6 +6,7 @@
 //! which applies on Connect.
 
 mod dictation;
+mod history;
 mod layout;
 mod microphone;
 mod this_pc;
@@ -24,8 +25,8 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, Once};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HDC, InvalidateRect, SetBkColor,
-    SetTextColor,
+    DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HDC, InvalidateRect, ScreenToClient,
+    SetBkColor, SetTextColor,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
@@ -44,17 +45,24 @@ static HOT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Dictation,
+    History,
     Microphone,
     ThisPc,
 }
 
 /// The sidebar, in the Mac app's order.
-const PAGES: [Page; 3] = [Page::Dictation, Page::Microphone, Page::ThisPc];
+const PAGES: [Page; 4] = [
+    Page::Dictation,
+    Page::History,
+    Page::Microphone,
+    Page::ThisPc,
+];
 
 impl Page {
     fn title(self) -> &'static str {
         match self {
             Page::Dictation => "Dictation",
+            Page::History => "History",
             Page::Microphone => "Microphone",
             Page::ThisPc => "This PC",
         }
@@ -63,6 +71,7 @@ impl Page {
     fn icon(self) -> Icon {
         match self {
             Page::Dictation => Icon::Waveform,
+            Page::History => Icon::Clock,
             Page::Microphone => Icon::Microphone,
             Page::ThisPc => Icon::Laptop,
         }
@@ -75,6 +84,7 @@ impl Page {
     fn build(self, page: &mut Builder, context: &Context) {
         match self {
             Page::Dictation => dictation::build(page, context),
+            Page::History => history::build(page, context),
             Page::Microphone => microphone::build(page, context),
             Page::ThisPc => this_pc::build(page, context),
         }
@@ -144,13 +154,46 @@ const CHECK: i32 = 108;
 const COPY: i32 = 109;
 const TEST: i32 = 110;
 const GEAR: i32 = 111;
+const HISTORY: i32 = 140;
+const DEVICE: i32 = 141;
+const SOURCE: i32 = 142;
+const REFRESH: i32 = 143;
+const LOAD: i32 = 144;
+const RECORD_COPY: i32 = 145;
+const DELETE: i32 = 146;
+const OPEN_AUDIO: i32 = 147;
+const OPEN_ORIGINAL: i32 = 148;
+/// History's rows, which are painted, not controls: `ROW + index`.
+const ROW: i32 = 6000;
 /// Sidebar buttons: `NAV + index`.
 const NAV: i32 = 120;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 8] = [CHECK, COPY, TEST, GEAR, MICROPHONE, CONNECT, HOTKEY, LAUNCH];
+const BUTTONS: [i32; 17] = [
+    CHECK,
+    COPY,
+    TEST,
+    HISTORY,
+    GEAR,
+    DEVICE,
+    SOURCE,
+    REFRESH,
+    RECORD_COPY,
+    DELETE,
+    OPEN_AUDIO,
+    OPEN_ORIGINAL,
+    LOAD,
+    MICROPHONE,
+    CONNECT,
+    HOTKEY,
+    LAUNCH,
+];
 /// Popup list choices: `PICK_MICROPHONE + index` and `PICK_HOTKEY + index`.
 const PICK_MICROPHONE: usize = 1000;
 const PICK_HOTKEY: usize = 2000;
+const PICK_DEVICE: usize = 3000;
+const PICK_SOURCE: usize = 4000;
+/// A History request finished; lay the page out again.
+const WM_HISTORY: u32 = WM_APP + 30;
 /// `EM_SETCUEBANNER`: grey hint text in an empty text box.
 const EM_SETCUEBANNER: u32 = 0x1501;
 /// `WM_DEVICECHANGE` with `DBT_DEVNODES_CHANGED`: a device came or went.
@@ -188,8 +231,15 @@ pub fn close() {
 pub fn refresh() {
     let window = window();
     if !window.is_null() {
+        if state().page == Page::History {
+            history::catch_up(window, finished());
+        }
         relayout(window);
     }
+}
+
+fn finished() -> u64 {
+    app::shared().status(|status| status.finished)
 }
 
 /// Opens the window on `page`, or brings it forward and shows that page.
@@ -440,9 +490,12 @@ fn relayout(window: HWND) {
     let context = context();
     let page = state().page;
     let client = client(window);
-    let left = px(SIDE + PADDING);
-    let right = (client.right - px(PADDING)).min(left + px(MAX_WIDTH));
-    let mut builder = Builder::new(left, right.max(left + px(200)), px(TOP));
+    // The page keeps to MAX_WIDTH and sits centred in whatever room is left.
+    let start = px(SIDE + PADDING);
+    let room = client.right - px(PADDING) - start;
+    let width = room.min(px(MAX_WIDTH)).max(px(200));
+    let left = start + (room - width).max(0) / 2;
+    let mut builder = Builder::new(left, left + width, px(TOP), client.bottom);
     page.build(&mut builder, &context);
     let layout = builder.finish();
     {
@@ -505,6 +558,30 @@ fn place_controls(window: HWND) {
     }
 }
 
+/// The scrolling pane under a point in the window, if any.
+fn pane_at(point: POINT) -> Option<layout::Pane> {
+    let state = state();
+    let y = point.y + state.scroll;
+    state.layout.panes.iter().copied().find(|pane| {
+        (pane.area.left..pane.area.right).contains(&point.x)
+            && (pane.area.top..pane.area.bottom).contains(&y)
+    })
+}
+
+/// The painted area's id under a point in the window, if any.
+fn hit_at(point: POINT) -> Option<i32> {
+    let state = state();
+    let y = point.y + state.scroll;
+    state
+        .layout
+        .hits
+        .iter()
+        .find(|(area, _)| {
+            (area.left..area.right).contains(&point.x) && (area.top..area.bottom).contains(&y)
+        })
+        .map(|(_, id)| *id)
+}
+
 /// Scrolls by `delta` device pixels, within the page.
 fn scroll_by(window: HWND, delta: i32) {
     let view = client(window).bottom;
@@ -554,6 +631,9 @@ fn show_page(window: HWND, page: Page) {
     }
     if page == Page::Microphone {
         refresh_microphones();
+    }
+    if page == Page::History {
+        history::opened(window, finished());
     }
     set_window_title(window, &format!("Inlay · {}", page.title()));
     unsafe {
@@ -716,6 +796,14 @@ fn open_choice(window: HWND, id: i32) {
         let selected = choices.iter().position(|choice| *choice == saved);
         state.microphone_choices = choices;
         (labels, selected, PICK_MICROPHONE)
+    } else if id == DEVICE || id == SOURCE {
+        let (labels, selected) = history::choices(id);
+        let base = if id == DEVICE {
+            PICK_DEVICE
+        } else {
+            PICK_SOURCE
+        };
+        (labels, selected, base)
     } else {
         let current = app::shared().settings().config.hotkey;
         (
@@ -745,6 +833,16 @@ fn open_choice(window: HWND, id: i32) {
 
 /// Applies a choice from the popup list.
 fn pick(window: HWND, id: usize) {
+    if id >= PICK_DEVICE {
+        if id >= PICK_SOURCE {
+            history::choose_source(window, id - PICK_SOURCE);
+        } else {
+            history::choose_device(id - PICK_DEVICE);
+        }
+        let field = if id >= PICK_SOURCE { SOURCE } else { DEVICE };
+        unsafe { SetFocus(GetDlgItem(window, field)) };
+        return relayout(window);
+    }
     let app = app::shared();
     let (result, field) = if id >= PICK_HOTKEY {
         let key = hotkey::KEYS.get(id - PICK_HOTKEY);
@@ -827,8 +925,15 @@ fn command(window: HWND, id: i32) {
             let _ = app.events.send(Event::Test);
         }
         GEAR => return show_page(window, Page::ThisPc),
+        HISTORY => return show_page(window, Page::History),
         CONNECT => return connect(window),
-        MICROPHONE | HOTKEY => return open_choice(window, id),
+        MICROPHONE | HOTKEY | DEVICE | SOURCE => return open_choice(window, id),
+        REFRESH => history::load(window, false),
+        LOAD => history::load(window, true),
+        RECORD_COPY => history::copy(),
+        DELETE => history::delete(window),
+        OPEN_AUDIO | OPEN_ORIGINAL => history::open_audio(window, id == OPEN_ORIGINAL),
+        _ if id >= ROW => history::select((id - ROW) as usize),
         LAUNCH => toggle_launch(),
         _ if (NAV..NAV + PAGES.len() as i32).contains(&id) => {
             return show_page(window, PAGES[(id - NAV) as usize]);
@@ -869,7 +974,35 @@ unsafe extern "system" fn window_proc(
         }
         WM_MOUSEWHEEL => {
             let delta = ((wparam >> 16) & 0xFFFF) as u16 as i16 as i32;
-            scroll_by(window, -delta * px(48) / WHEEL_DELTA as i32);
+            let delta = -delta * px(48) / WHEEL_DELTA as i32;
+            // The wheel's position is on the screen.
+            let mut point = POINT {
+                x: (lparam & 0xFFFF) as u16 as i16 as i32,
+                y: ((lparam >> 16) & 0xFFFF) as u16 as i16 as i32,
+            };
+            unsafe { ScreenToClient(window, &mut point) };
+            match pane_at(point) {
+                Some(pane) => {
+                    if history::scroll(pane.id, delta, pane.limit) {
+                        relayout(window);
+                    }
+                }
+                None => scroll_by(window, delta),
+            }
+            0
+        }
+        WM_LBUTTONDOWN => {
+            let point = POINT {
+                x: (lparam & 0xFFFF) as u16 as i16 as i32,
+                y: ((lparam >> 16) & 0xFFFF) as u16 as i16 as i32,
+            };
+            if let Some(id) = hit_at(point) {
+                command(window, id);
+            }
+            0
+        }
+        WM_HISTORY => {
+            relayout(window);
             0
         }
         WM_DEVICECHANGE => {

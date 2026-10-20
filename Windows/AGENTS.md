@@ -29,6 +29,7 @@ cargo xwin build --release   # from WSL/Linux; on Windows use `cargo build --rel
    - The tray icon and tooltip for offline, ready, recording, processing and error.
    - The window: each page, and scrolling when it is smaller than its page. On This PC, **Connect** with a wrong token, with a LAN `http://` address (refused), and with the right token. Confirm `config.json`, the Credential Manager entry and the Run key.
    - **Test microphone**: `GET /v1/generations` should show a `test` record with delivery `tested`, and nothing pasted.
+   - History: filters, selecting a row, scrolling the list, and deleting one of your own test records.
    - A hold-to-talk take. The log should show admission, the microphone, uploaded frames and chunks, and the delivery status. `GET /v1/generations` should show the record with `device`, audio artifacts and `delivery`.
    - Paste into Notepad (Ctrl+V) and Windows Terminal (Ctrl+Shift+V), then confirm the clipboard comes back. `inlay.exe --paste TEXT` exercises the same path with known text.
    - **Copy last message**, and **Quit**.

@@ -23,6 +23,11 @@ pub enum Icon {
     Gear,
     Waveform,
     Laptop,
+    Clock,
+    Refresh,
+    Trash,
+    Check,
+    Paragraph,
 }
 
 impl Icon {
@@ -44,6 +49,14 @@ impl Icon {
             Icon::Gear => canvas.gear(x, y, size, rgb),
             Icon::Waveform => canvas.waveform(x, y, size, rgb),
             Icon::Laptop => canvas.laptop(x, y, size, rgb),
+            Icon::Clock => canvas.clock(x, y, size, rgb),
+            Icon::Refresh => canvas.refresh(x, y, size, rgb),
+            Icon::Trash => canvas.trash(x, y, size, rgb),
+            Icon::Check => {
+                let half = size as f32 / 2.0;
+                canvas.check(x as f32 + half, y as f32 + half, size as f32 * 0.6, rgb);
+            }
+            Icon::Paragraph => canvas.paragraph(x, y, size, rgb),
         }
     }
 }
@@ -76,6 +89,20 @@ pub enum Item {
         label: String,
         pressed: bool,
     },
+    /// A rounded highlight, such as a selected row.
+    Fill {
+        area: RECT,
+        colour: u32,
+    },
+    Icon {
+        icon: Icon,
+        x: i32,
+        y: i32,
+        size: i32,
+        colour: u32,
+    },
+    /// Limits the items after it to an area, until a `Clip(None)`.
+    Clip(Option<RECT>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -155,6 +182,11 @@ impl Control {
         self
     }
 
+    /// The control's natural width in device pixels.
+    pub fn width(&self) -> i32 {
+        self.size().0
+    }
+
     /// The text a screen reader announces for the control.
     pub fn label(&self) -> Option<&str> {
         match self {
@@ -199,9 +231,21 @@ pub struct Placed {
     pub background: u32,
 }
 
+/// A region of a fixed page that scrolls on its own, such as History's list.
+#[derive(Clone, Copy)]
+pub struct Pane {
+    pub id: usize,
+    pub area: RECT,
+    /// How far it can scroll, in device pixels.
+    pub limit: i32,
+}
+
 pub struct Layout {
     pub items: Vec<Item>,
     pub controls: Vec<Placed>,
+    /// Painted areas that act on a click, such as History's rows, by id.
+    pub hits: Vec<(RECT, i32)>,
+    pub panes: Vec<Pane>,
     /// The page's full height, which may be taller than the window.
     pub height: i32,
 }
@@ -210,6 +254,8 @@ impl Layout {
     pub const EMPTY: Layout = Layout {
         items: Vec::new(),
         controls: Vec::new(),
+        hits: Vec::new(),
+        panes: Vec::new(),
         height: 0,
     };
 
@@ -308,18 +354,27 @@ pub struct Builder {
     left: i32,
     right: i32,
     y: i32,
+    /// The window's height, for pages that fit it instead of scrolling.
+    view: i32,
+    fixed: bool,
     items: Vec<Item>,
     controls: Vec<Placed>,
+    hits: Vec<(RECT, i32)>,
+    panes: Vec<Pane>,
 }
 
 impl Builder {
-    pub fn new(left: i32, right: i32, top: i32) -> Builder {
+    pub fn new(left: i32, right: i32, top: i32, view: i32) -> Builder {
         Builder {
             left,
             right,
             y: top,
+            view,
+            fixed: false,
             items: Vec::new(),
             controls: Vec::new(),
+            hits: Vec::new(),
+            panes: Vec::new(),
         }
     }
 
@@ -328,12 +383,47 @@ impl Builder {
         Layout {
             items: self.items,
             controls: self.controls,
-            height: self.y,
+            hits: self.hits,
+            panes: self.panes,
+            height: if self.fixed { self.view } else { self.y },
         }
     }
 
     pub fn width(&self) -> i32 {
         self.right - self.left
+    }
+
+    pub fn left(&self) -> i32 {
+        self.left
+    }
+
+    pub fn right(&self) -> i32 {
+        self.right
+    }
+
+    /// Where the next item goes.
+    pub fn y(&self) -> i32 {
+        self.y
+    }
+
+    pub fn view(&self) -> i32 {
+        self.view
+    }
+
+    /// Fits the page to the window: it never scrolls as a whole, and its
+    /// panes scroll instead.
+    pub fn fix(&mut self) {
+        self.fixed = true;
+    }
+
+    /// A pane that scrolls on its own, `limit` device pixels at most.
+    pub fn pane(&mut self, id: usize, area: RECT, limit: i32) {
+        self.panes.push(Pane { id, area, limit });
+    }
+
+    /// A painted area that acts like a button with `id` when clicked.
+    pub fn hit(&mut self, area: RECT, id: i32) {
+        self.hits.push((area, id));
     }
 
     /// Vertical space, in logical pixels.
@@ -389,6 +479,27 @@ impl Builder {
         let (width, height) = control.size();
         let area = RECT {
             left: right - width,
+            top: middle - height / 2,
+            right,
+            bottom: middle - height / 2 + height,
+        };
+        self.place(id, control, area, background);
+        area
+    }
+
+    /// Like `place_right`, but never wider than `max` device pixels.
+    pub fn place_right_within(
+        &mut self,
+        id: i32,
+        control: Control,
+        right: i32,
+        middle: i32,
+        background: u32,
+        max: i32,
+    ) -> RECT {
+        let (width, height) = control.size();
+        let area = RECT {
+            left: right - width.min(max),
             top: middle - height / 2,
             right,
             bottom: middle - height / 2 + height,
@@ -767,6 +878,15 @@ pub fn paint(canvas: &Canvas, items: &[Item], scroll: i32, focus: i32) {
                 label,
                 pressed,
             } => key_cap(canvas, shift(area), label, *pressed),
+            Item::Fill { area, colour } => canvas.round(shift(area), 8.0 * s, *colour),
+            Item::Icon {
+                icon,
+                x,
+                y,
+                size,
+                colour,
+            } => icon.draw(canvas, *x, y - scroll, *size, *colour),
+            Item::Clip(area) => canvas.clip(area.as_ref().map(shift)),
         }
     }
 }

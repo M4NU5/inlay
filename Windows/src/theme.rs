@@ -589,6 +589,80 @@ impl Canvas {
         }
     }
 
+    /// A clock with an arrow running round it, the History page's icon.
+    pub fn clock(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let (cx, cy) = (x as f32 + 12.0 * unit, y as f32 + 12.0 * unit);
+        let width = 1.8 * unit;
+        self.arc((cx, cy), 8.5 * unit, (200.0, 300.0), rgb, width);
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        self.lines(&[at(2.2, 6.5), at(3.8, 10.2), at(7.4, 8.6)], rgb, width);
+        self.lines(&[at(12.0, 7.5), at(12.0, 12.0), at(15.0, 14.0)], rgb, width);
+    }
+
+    /// A circular arrow, the Refresh icon.
+    pub fn refresh(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let (cx, cy) = (x as f32 + 12.0 * unit, y as f32 + 12.0 * unit);
+        let width = 1.8 * unit;
+        self.arc((cx, cy), 7.5 * unit, (-60.0, 300.0), rgb, width);
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        self.lines(&[at(12.8, 2.0), at(16.2, 5.0), at(12.6, 7.6)], rgb, width);
+    }
+
+    /// A bin, the Delete icon.
+    pub fn trash(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        let width = 1.7 * unit;
+        self.lines(&[at(4.0, 6.5), at(20.0, 6.5)], rgb, width);
+        self.lines(
+            &[at(9.0, 6.5), at(9.5, 3.5), at(14.5, 3.5), at(15.0, 6.5)],
+            rgb,
+            width,
+        );
+        self.lines(
+            &[at(6.0, 6.5), at(7.2, 20.5), at(16.8, 20.5), at(18.0, 6.5)],
+            rgb,
+            width,
+        );
+        self.lines(&[at(10.0, 10.0), at(10.3, 17.0)], rgb, width);
+        self.lines(&[at(14.0, 10.0), at(13.7, 17.0)], rgb, width);
+    }
+
+    /// Lines of text, for an empty detail pane.
+    pub fn paragraph(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        for (row, end) in [(5.0, 21.0), (10.0, 15.0), (15.0, 21.0), (20.0, 15.0)] {
+            self.lines(&[at(3.0, row), at(end, row)], rgb, 1.8 * unit);
+        }
+    }
+
+    /// Limits later drawing, shapes and text, to `area`. `None` lifts the limit.
+    pub fn clip(&self, area: Option<RECT>) {
+        unsafe {
+            match area {
+                Some(area) => {
+                    GdipSetClipRectI(
+                        self.graphics,
+                        area.left,
+                        area.top,
+                        area.right - area.left,
+                        area.bottom - area.top,
+                        CombineModeReplace,
+                    );
+                    SelectClipRgn(self.dc, null_mut());
+                    IntersectClipRect(self.dc, area.left, area.top, area.right, area.bottom);
+                }
+                None => {
+                    GdipResetClip(self.graphics);
+                    SelectClipRgn(self.dc, null_mut());
+                }
+            }
+        }
+    }
+
     /// The small up-and-down chevrons beside a choice's value.
     pub fn updown(&self, center_x: f32, center_y: f32, size: f32, rgb: u32) {
         let half = size / 2.0;
