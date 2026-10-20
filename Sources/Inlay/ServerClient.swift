@@ -32,23 +32,31 @@ enum ServerClientError: LocalizedError {
 /// redirect a running upload or accidentally send its credential to another host.
 struct ServerClient: Sendable {
     let endpoint: URL
+    /// The normalized address this client was built from, as listed in client.json.
+    let address: String
     private let token: String
     let session: URLSession
 
     init(endpoint: String, token: String, session: URLSession? = nil) throws {
-        self.endpoint = try ServerEndpoint(endpoint).url
+        let validated = try ServerEndpoint(endpoint)
+        self.endpoint = validated.url
+        address = validated.address
         self.token = token
         self.session = session ?? Self.defaultSession
     }
 
-    private static let defaultSession: URLSession = {
+    private static let defaultSession = makeSession(requestTimeout: 12, resourceTimeout: 300)
+    /// Failover health checks give up quickly so a dead server never holds up the others.
+    static let probeSession = makeSession(requestTimeout: 2, resourceTimeout: 2)
+
+    private static func makeSession(requestTimeout: TimeInterval, resourceTimeout: TimeInterval) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 12
-        configuration.timeoutIntervalForResource = 300
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.urlCache = nil
         return URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
-    }()
+    }
 
     /// `segment` is appended as exactly one percent-encoded path segment, so a
     /// caller-chosen ID containing `/`, `%`, `?`, or `#` cannot change the route.
