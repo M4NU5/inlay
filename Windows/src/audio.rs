@@ -49,27 +49,15 @@ pub fn default_input_name() -> Option<String> {
 
 pub struct Recording {
     stream: cpal::Stream,
-    stats: Arc<CaptureStats>,
+    frames: Arc<AtomicU64>,
     pub device: String,
-}
-
-#[derive(Default)]
-struct CaptureStats {
-    frames: AtomicU64,
-    discontinuities: AtomicU64,
 }
 
 impl Recording {
     /// Stops the microphone and returns how many 16 kHz frames were handed on.
     pub fn stop(self) -> u64 {
         drop(self.stream);
-        let discontinuities = self.stats.discontinuities.load(Ordering::Relaxed);
-        if discontinuities > 0 {
-            log!(
-                "audio: recording continued through {discontinuities} capture discontinuity notification(s)"
-            );
-        }
-        self.stats.frames.load(Ordering::SeqCst)
+        self.frames.load(Ordering::SeqCst)
     }
 }
 
@@ -102,7 +90,7 @@ pub fn start(
         config.sample_rate,
         config.channels
     );
-    let stats = Arc::new(CaptureStats::default());
+    let frames = Arc::new(AtomicU64::new(0));
     LEVEL.store(0, Ordering::Relaxed);
     let sink = Sink {
         channels: config.channels.max(1) as usize,
@@ -111,7 +99,7 @@ pub fn start(
         level: 0.0,
         mono: Vec::new(),
         chunks,
-        stats: stats.clone(),
+        frames: frames.clone(),
         notify: notify.clone(),
         done: false,
     };
@@ -136,7 +124,7 @@ pub fn start(
         .map_err(|error| format!("Could not start {name}: {error}"))?;
     Ok(Recording {
         stream,
-        stats,
+        frames,
         device: name,
     })
 }
@@ -151,16 +139,13 @@ where
     T: SizedSample,
     f32: FromSample<T>,
 {
-    let stats = sink.stats.clone();
     device.build_input_stream::<T, _, _>(
         config,
         move |data: &[T], _: &cpal::InputCallbackInfo| sink.push(data),
-        move |error| {
-            // WASAPI reports a discontinuity as Xrun, then keeps delivering
-            // packets. A missed audio deadline must not cancel the take.
-            if error.kind() == cpal::ErrorKind::Xrun {
-                stats.discontinuities.fetch_add(1, Ordering::Relaxed);
-            } else {
+        move |error: cpal::Error| {
+            // A glitch drops a few samples but the stream keeps running, so it
+            // must not end the take. Some USB microphones report one on start.
+            if !matches!(error.kind(), cpal::ErrorKind::Xrun) {
                 notify(Stop::Device(error.to_string()));
             }
         },
@@ -177,7 +162,7 @@ struct Sink {
     level: f32,
     mono: Vec<f32>,
     chunks: SyncSender<Vec<f32>>,
-    stats: Arc<CaptureStats>,
+    frames: Arc<AtomicU64>,
     notify: Notify,
     done: bool,
 }
@@ -225,14 +210,14 @@ impl Sink {
         }
         let mut output = Vec::with_capacity(self.mono.len());
         self.resampler.process(&self.mono, &mut output);
-        let room = (MAX_FRAMES - self.stats.frames.load(Ordering::SeqCst)) as usize;
+        let room = (MAX_FRAMES - self.frames.load(Ordering::SeqCst)) as usize;
         let at_limit = output.len() >= room;
         output.truncate(room);
         let count = output.len() as u64;
         if count > 0 {
             match self.chunks.try_send(output) {
                 Ok(()) => {
-                    self.stats.frames.fetch_add(count, Ordering::SeqCst);
+                    self.frames.fetch_add(count, Ordering::SeqCst);
                 }
                 Err(TrySendError::Full(_)) => {
                     self.done = true;
