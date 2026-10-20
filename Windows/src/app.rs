@@ -60,6 +60,8 @@ pub struct Status {
     pub tests: usize,
     /// The latest test's transcript, or why it stopped without one.
     pub test: Option<Result<Dictation, String>>,
+    /// The take number of the latest test. Only it may set `test`.
+    pub latest_test: u64,
     pub notice: Option<Notice>,
     pub last: Option<Dictation>,
     /// Why the latest take failed. Cleared when the next one starts.
@@ -89,6 +91,7 @@ impl App {
                 processing: 0,
                 tests: 0,
                 test: None,
+                latest_test: 0,
                 notice: None,
                 last: None,
                 error: None,
@@ -251,29 +254,36 @@ impl App {
     }
 }
 
-/// Counts a test take as running, from its start until its result is shown.
-/// A test that ends without a transcript keeps the reason it gave.
-pub struct TestTake(Arc<App>);
+/// Counts test take `take` as running, from its start until its result is
+/// shown. A test that ends without a transcript keeps the reason it gave. An
+/// earlier test still transcribing never replaces a later one's result.
+pub struct TestTake(Arc<App>, u64);
 
 impl App {
-    pub fn test_take(self: &Arc<Self>) -> TestTake {
+    pub fn test_take(self: &Arc<Self>, take: u64) -> TestTake {
         self.update(|status| {
             status.tests += 1;
             status.test = None;
+            status.latest_test = take;
         });
-        TestTake(self.clone())
+        TestTake(self.clone(), take)
     }
 
-    pub fn set_test_result(&self, dictation: Dictation) {
-        self.update(|status| status.test = Some(Ok(dictation)));
+    pub fn set_test_result(&self, take: u64, dictation: Dictation) {
+        self.update(|status| {
+            if status.latest_test == take {
+                status.test = Some(Ok(dictation));
+            }
+        });
     }
 }
 
 impl Drop for TestTake {
     fn drop(&mut self) {
+        let take = self.1;
         self.0.update(|status| {
             status.tests -= 1;
-            if status.test.is_none() {
+            if status.latest_test == take && status.test.is_none() {
                 let reason = status.notice.as_ref().map_or_else(
                     || "The test stopped before it was transcribed.".to_string(),
                     |notice| notice.text.clone(),

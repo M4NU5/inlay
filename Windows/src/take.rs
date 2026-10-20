@@ -60,13 +60,13 @@ pub fn start(id: u64, app: Arc<App>, test: bool) -> Handle {
     let thread = thread::Builder::new()
         .name(format!("take-{id}"))
         .spawn(move || {
-            let _test = test.then(|| app.test_take());
+            let _test = test.then(|| app.test_take(id));
             app.set_recording(true, test);
             let released = record(&app, &inbox, &own, test);
             app.set_recording(false, test);
             let _ = app.events.send(Event::TakeEnded(id));
             if let Some(released) = released {
-                process(&app, released);
+                process(&app, released, id);
             }
         })
         .expect("cannot start a take thread");
@@ -263,7 +263,7 @@ fn upload(
     Ok(frames)
 }
 
-fn process(app: &Arc<App>, released: Released) {
+fn process(app: &Arc<App>, released: Released, take: u64) {
     let busy = app.processing();
     let Released {
         api,
@@ -331,7 +331,7 @@ fn process(app: &Arc<App>, released: Released) {
     }
     let seconds = frames as f64 / f64::from(SAMPLE_RATE);
     let (status, message) = if test {
-        report_test(app, &record, seconds)
+        report_test(app, &record, seconds, take)
     } else {
         deliver(app, &record, seconds)
     };
@@ -345,7 +345,7 @@ fn process(app: &Arc<App>, released: Released) {
 }
 
 /// A test shows its transcript on the Dictation page and pastes nothing.
-fn report_test(app: &App, record: &Generation, seconds: f64) -> (&'static str, String) {
+fn report_test(app: &App, record: &Generation, seconds: f64, take: u64) -> (&'static str, String) {
     let text = shown_text(record);
     let outcome = if text.is_empty() {
         "No speech detected"
@@ -359,7 +359,7 @@ fn report_test(app: &App, record: &Generation, seconds: f64) -> (&'static str, S
         seconds,
     };
     app.set_last(dictation.clone());
-    app.set_test_result(dictation);
+    app.set_test_result(take, dictation);
     ("tested", outcome.into())
 }
 
