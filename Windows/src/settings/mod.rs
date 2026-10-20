@@ -490,9 +490,12 @@ fn relayout(window: HWND) {
     let context = context();
     let page = state().page;
     let client = client(window);
-    let left = px(SIDE + PADDING);
-    let right = (client.right - px(PADDING)).min(left + px(MAX_WIDTH));
-    let mut builder = Builder::new(left, right.max(left + px(200)), px(TOP), client.bottom);
+    // The page keeps to MAX_WIDTH and sits centred in whatever room is left.
+    let start = px(SIDE + PADDING);
+    let room = client.right - px(PADDING) - start;
+    let width = room.min(px(MAX_WIDTH)).max(px(200));
+    let left = start + (room - width).max(0) / 2;
+    let mut builder = Builder::new(left, left + width, px(TOP), client.bottom);
     page.build(&mut builder, &context);
     let layout = builder.finish();
     {
