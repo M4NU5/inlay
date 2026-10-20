@@ -159,6 +159,7 @@ fn record(app: &Arc<App>, inbox: &Receiver<Signal>, own: &Sender<Signal>) -> Opt
         }
     };
     log!("take: recording from {}", recording.device);
+    app.set_capturing();
 
     let signal = inbox
         .recv()
@@ -245,7 +246,7 @@ fn upload(
 }
 
 fn process(app: &Arc<App>, released: Released) {
-    let _busy = app.processing();
+    let busy = app.processing();
     let Released {
         api,
         generation,
@@ -310,6 +311,8 @@ fn process(app: &Arc<App>, released: Released) {
         thread::sleep(Duration::from_millis(50));
     }
     let (status, message) = deliver(app, &record);
+    // The pill shows "Pasted" now, not after the receipt round trip.
+    drop(busy);
     drop(ticket);
     log!("take: {generation} delivery {status}");
     if let Err(error) = api.delivery(&generation, status, &message) {
@@ -334,6 +337,7 @@ fn deliver(app: &App, record: &Generation) -> (&'static str, String) {
     );
     match paste::paste(&record.insertion_text) {
         Ok(()) => {
+            app.set_pasted();
             app.note("Pasted. If nothing appeared, use Copy last transcript.");
             (
                 "unconfirmed",

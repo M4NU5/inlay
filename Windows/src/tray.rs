@@ -4,15 +4,17 @@
 use crate::app::{self, App, Server};
 use crate::controller::Event;
 use crate::icons::{self, Look};
+use crate::menu::{self, Anchor, Entry, Header};
+use crate::theme::{self, px};
 use crate::win::{fill, wide};
-use crate::{hotkey, paste, settings};
+use crate::{hotkey, overlay, paste, settings};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY,
@@ -29,7 +31,6 @@ const WM_TRAY: u32 = WM_APP + 1;
 const WM_REFRESH: u32 = WM_APP + 2;
 const WM_NOTIFY_ERROR: u32 = WM_APP + 3;
 const NOTICE_TIMER: usize = 1;
-const ID_STATUS: usize = 10;
 const ID_COPY: usize = 11;
 const ID_SETTINGS: usize = 12;
 const ID_QUIT: usize = 13;
@@ -85,6 +86,7 @@ pub fn run(first_run: bool) -> Result<(), String> {
         if window.is_null() {
             return Err("Windows could not create the tray window.".into());
         }
+        theme::start();
         let _ = ICONS.set(
             [Look::Idle, Look::Recording, Look::Processing, Look::Error]
                 .map(|look| icons::create(look) as usize),
@@ -122,11 +124,15 @@ unsafe extern "system" fn window_proc(
         }
         WM_REFRESH => {
             update_icon(window);
+            menu::set_header(window, header(app::shared()));
+            settings::refresh();
+            overlay::update();
             0
         }
         WM_TIMER => {
             unsafe { KillTimer(window, NOTICE_TIMER) };
             update_icon(window);
+            menu::set_header(window, header(app::shared()));
             0
         }
         WM_NOTIFY_ERROR => {
@@ -213,6 +219,39 @@ fn describe(app: &App) -> (Look, String) {
     })
 }
 
+/// The menu's top: a short state beside the name, and the tooltip's message.
+/// When all is well the message says how to dictate instead.
+fn header(app: &App) -> Header {
+    let (look, text) = describe(app);
+    let key = hotkey::key(&app.settings().config.hotkey).label;
+    let (server, quiet) = app.status(|status| {
+        let quiet = status
+            .notice
+            .as_ref()
+            .is_none_or(|notice| notice.until <= Instant::now());
+        (status.server.clone(), quiet)
+    });
+    let (state, dot) = match look {
+        Look::Recording => ("Listening", theme::RED),
+        Look::Processing => ("Transcribing", theme::ORANGE),
+        Look::Error if matches!(server, Server::Unavailable(_)) => ("Offline", theme::RED),
+        Look::Error => ("Error", theme::RED),
+        Look::Idle if server == Server::Ready => ("Ready", theme::GREEN),
+        Look::Idle => ("Connecting", theme::ORANGE),
+    };
+    let ready = look == Look::Idle && server == Server::Ready && quiet;
+    Header {
+        state: state.into(),
+        dot,
+        message: if ready {
+            format!("Hold {key} to dictate")
+        } else {
+            text
+        },
+        ready,
+    }
+}
+
 fn update_icon(window: HWND) {
     let app = app::shared();
     let (look, text) = describe(app);
@@ -258,43 +297,24 @@ fn show_error(window: HWND) {
 }
 
 fn show_menu(window: HWND) {
-    let app = app::shared();
-    let (_, status) = describe(app);
-    let has_transcript = app.status(|status| status.last_transcript.is_some());
-    unsafe {
-        let menu = CreatePopupMenu();
-        let items = [
-            (MF_STRING | MF_GRAYED, ID_STATUS, status.as_str()),
-            (MF_SEPARATOR, 0, ""),
-            (
-                MF_STRING | if has_transcript { 0 } else { MF_GRAYED },
-                ID_COPY,
-                "Copy last transcript",
-            ),
-            (MF_STRING, ID_SETTINGS, "Settings…"),
-            (MF_SEPARATOR, 0, ""),
-            (MF_STRING, ID_QUIT, "Quit Inlay"),
-        ];
-        for (flags, id, text) in items {
-            let text = wide(text);
-            AppendMenuW(menu, flags, id, text.as_ptr());
-        }
-        let mut point = POINT { x: 0, y: 0 };
-        GetCursorPos(&mut point);
-        // Required for the menu to close when the user clicks elsewhere.
-        SetForegroundWindow(window);
-        TrackPopupMenu(
-            menu,
-            TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
-            point.x,
-            point.y,
-            0,
-            window,
-            null(),
-        );
-        PostMessageW(window, WM_NULL, 0, 0);
-        DestroyMenu(menu);
+    if menu::recently_closed() {
+        return;
     }
+    let app = app::shared();
+    let has_transcript = app.status(|status| status.last_transcript.is_some());
+    let item = |id, label: &str, enabled| Entry::Item {
+        id,
+        label: label.into(),
+        enabled,
+        checked: false,
+    };
+    let entries = vec![
+        item(ID_COPY, "Copy last transcript", has_transcript),
+        item(ID_SETTINGS, "Settings…", true),
+        Entry::Separator,
+        item(ID_QUIT, "Quit Inlay", true),
+    ];
+    menu::show(window, Some(header(app)), entries, px(300), Anchor::Cursor);
 }
 
 fn copy_last() {
@@ -314,6 +334,7 @@ fn quit(window: HWND) {
     if app::shared().events.send(Event::Quit(done)).is_ok() {
         let _ = finished.recv_timeout(Duration::from_secs(3));
     }
+    menu::close();
     settings::close();
     unsafe { DestroyWindow(window) };
 }

@@ -47,6 +47,10 @@ pub struct Status {
     pub processing: usize,
     pub notice: Option<Notice>,
     pub last_transcript: Option<String>,
+    /// When the microphone opened for the current take. `None` while it starts.
+    pub capturing_since: Option<Instant>,
+    /// When the last transcript was pasted, for the recording pill.
+    pub pasted_at: Option<Instant>,
 }
 
 pub struct App {
@@ -67,6 +71,8 @@ impl App {
                 processing: 0,
                 notice: None,
                 last_transcript: None,
+                capturing_since: None,
+                pasted_at: None,
             }),
             events,
             wake_monitor,
@@ -95,7 +101,19 @@ impl App {
     }
 
     pub fn set_recording(&self, recording: bool) {
-        self.update(|status| status.recording = recording);
+        self.update(|status| {
+            status.recording = recording;
+            status.capturing_since = None;
+        });
+    }
+
+    /// The microphone is open: the take has moved from starting to recording.
+    pub fn set_capturing(&self) {
+        self.update(|status| status.capturing_since = Some(Instant::now()));
+    }
+
+    pub fn set_pasted(&self) {
+        self.update(|status| status.pasted_at = Some(Instant::now()));
     }
 
     /// Counts a take as processing until the returned guard drops.
