@@ -48,8 +48,8 @@ const ORB: u32 = 0x0E161D;
 const BORDER: u32 = 0x2E4556;
 /// Bars in the waveform, one loudness sample each, as on the Mac.
 const BARS: usize = 9;
-/// Seconds between samples: twenty a second, as on the Mac.
-const SAMPLE: f32 = 0.05;
+/// Seconds between samples: a little slower than the Mac's twenty a second.
+const SAMPLE: f32 = 0.055;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Stage {
@@ -61,8 +61,8 @@ enum Stage {
     Pasted,
 }
 
-/// The waveform's samples, oldest first. The last one is sliding in from the
-/// right, due to land at `next`.
+/// The waveform's samples, oldest first. The last one is on its way in from
+/// the right, due to land at `next`.
 #[derive(Clone, Copy)]
 struct Stream {
     samples: [f32; BARS + 1],
@@ -82,7 +82,7 @@ impl Stream {
         }
     }
 
-    /// How far the newest sample has slid in, 0 to 1.
+    /// How far the newest sample has moved in, 0 to 1.
     fn slide(&self, now: f32) -> f32 {
         (1.0 - (self.next - now) / SAMPLE).clamp(0.0, 1.0)
     }
@@ -498,17 +498,14 @@ fn content(
                 alpha(theme::RED, pulse(1.2) * opacity),
             );
             x += 20.0 * s;
-            // Each bar is one sample, newest on the right. They slide left
-            // between samples: the oldest fades out as the newest fades in.
+            // The bars stay put while the loudness flows through them from
+            // right to left: each bar eases towards its right neighbour's
+            // sample until the next one arrives.
             let slide = stream.slide(now);
-            for (bar, level) in stream.samples.iter().enumerate() {
-                let fade = match bar {
-                    0 => 1.0 - slide,
-                    BARS => slide,
-                    _ => 1.0,
-                };
+            for (bar, pair) in stream.samples.windows(2).enumerate() {
+                let level = pair[0] + (pair[1] - pair[0]) * slide;
                 let tall = 3.0 * s + 19.0 * s * level;
-                let left = x + (bar as f32 - slide) * 6.0 * s;
+                let left = x + bar as f32 * 6.0 * s;
                 canvas.round(
                     RECT {
                         left: left.round() as i32,
@@ -517,7 +514,7 @@ fn content(
                         bottom: (middle + tall / 2.0).round() as i32,
                     },
                     1.5 * s,
-                    alpha(theme::ACCENT, fade * opacity),
+                    alpha(theme::ACCENT, opacity),
                 );
             }
             x += (BARS as f32 * 6.0 - 3.0 + 12.0) * s;
