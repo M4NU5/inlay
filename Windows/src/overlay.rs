@@ -77,9 +77,15 @@ impl Stream {
             self.samples.rotate_left(1);
             self.samples[BARS] = level;
         }
-        if steps > 0 {
-            self.next = now + SAMPLE;
-        }
+        self.next += steps as f32 * SAMPLE;
+    }
+
+    /// Silence, with the first sample due now.
+    fn clear(&mut self, now: f32) {
+        *self = Stream {
+            samples: [0.0; BARS + 1],
+            next: now,
+        };
     }
 
     /// How far the newest sample has moved in, 0 to 1.
@@ -176,10 +182,7 @@ pub fn update() {
             *ANCHOR
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = anchor();
-            *stream() = Stream {
-                samples: [0.0; BARS + 1],
-                next: now,
-            };
+            stream().clear(now);
             *guard = Some(Motion {
                 stage,
                 previous: stage,
@@ -207,8 +210,12 @@ pub fn update() {
             // A new take while shrinking away: grow back in.
             if motion.leaving_at.take().is_some() {
                 motion.shown_at = now;
+                stream().clear(now);
             }
             if discriminant(&motion.stage) != discriminant(&stage) {
+                if matches!(stage, Stage::Recording(_)) {
+                    stream().clear(now);
+                }
                 let current = frame(motion, now);
                 motion.from = Look {
                     width: current.width,
