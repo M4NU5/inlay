@@ -149,6 +149,7 @@ final class InlayController: ObservableObject {
         return shortcut.title
     }
     var isServerReady: Bool { serverHealth?.ready == true && serverHealth?.apiVersion == InlayAPI.version }
+    var isUsingFallback: Bool { activeEndpoint != preferences.endpoints.first }
     var canTest: Bool { isServerReady && permissions.microphone && microphones.resolution.device != nil && !isCapturing }
     var insertionMode: InsertionMode { Self.insertionMode(for: permissions) }
     static func insertionMode(for snapshot: PermissionSnapshot) -> InsertionMode {
