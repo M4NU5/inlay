@@ -92,6 +92,8 @@ pub struct Context {
     pub test_busy: bool,
     pub last: Option<Dictation>,
     pub error: Option<String>,
+    /// The latest test's transcript, or why it stopped without one.
+    pub test: Option<Result<Dictation, String>>,
     pub microphones: Vec<String>,
     pub default_microphone: Option<String>,
     pub launch: bool,
@@ -382,32 +384,27 @@ fn refresh_microphones() {
 fn context() -> Context {
     let app = app::shared();
     let settings = app.settings();
-    let (server, recording, testing, processing, test_busy, last, error) = app.status(|status| {
-        (
-            status.server.clone(),
-            status.recording,
-            status.testing,
-            status.processing > 0,
-            status.tests > 0,
-            status.last.clone(),
-            status.error.clone(),
-        )
+    let mut context = app.status(|status| Context {
+        settings,
+        server: status.server.clone(),
+        recording: status.recording,
+        testing: status.testing,
+        processing: status.processing > 0,
+        test_busy: status.tests > 0,
+        last: status.last.clone(),
+        error: status.error.clone(),
+        test: status.test.clone(),
+        microphones: Vec::new(),
+        default_microphone: None,
+        launch: false,
+        message: None,
     });
     let state = state();
-    Context {
-        settings,
-        server,
-        recording,
-        testing,
-        processing,
-        test_busy,
-        last,
-        error,
-        microphones: state.microphones.clone(),
-        default_microphone: state.default_microphone.clone(),
-        launch: state.launch,
-        message: state.message.clone(),
-    }
+    context.microphones = state.microphones.clone();
+    context.default_microphone = state.default_microphone.clone();
+    context.launch = state.launch;
+    context.message = state.message.clone();
+    context
 }
 
 /// A short description of the server's state and its dot colour.

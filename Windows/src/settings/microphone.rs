@@ -50,8 +50,14 @@ fn test_result(page: &mut Builder, context: &Context) {
         page.text_card("Test result", "", status, theme::MUTED, "");
         return;
     }
-    let Some(last) = context.last.as_ref().filter(|last| last.test) else {
-        return;
+    let last = match &context.test {
+        None => return,
+        Some(Err(reason)) => {
+            page.gap(16);
+            page.text_card("Test result", "", reason, theme::ORANGE, "");
+            return;
+        }
+        Some(Ok(last)) => last,
     };
     let seconds = format!("{:.1} s audio", last.seconds);
     page.gap(16);

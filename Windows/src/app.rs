@@ -48,8 +48,6 @@ pub struct Dictation {
     /// What became of it, such as "Pasted at your cursor".
     pub outcome: String,
     pub seconds: f64,
-    /// From Test microphone, so nothing was pasted.
-    pub test: bool,
 }
 
 pub struct Status {
@@ -60,6 +58,8 @@ pub struct Status {
     pub processing: usize,
     /// Test takes recording or transcribing, for the Microphone page.
     pub tests: usize,
+    /// The latest test's transcript, or why it stopped without one.
+    pub test: Option<Result<Dictation, String>>,
     pub notice: Option<Notice>,
     pub last: Option<Dictation>,
     /// Why the latest take failed. Cleared when the next one starts.
@@ -88,6 +88,7 @@ impl App {
                 testing: false,
                 processing: 0,
                 tests: 0,
+                test: None,
                 notice: None,
                 last: None,
                 error: None,
@@ -249,18 +250,35 @@ impl App {
 }
 
 /// Counts a test take as running, from its start until its result is shown.
+/// A test that ends without a transcript keeps the reason it gave.
 pub struct TestTake(Arc<App>);
 
 impl App {
     pub fn test_take(self: &Arc<Self>) -> TestTake {
-        self.update(|status| status.tests += 1);
+        self.update(|status| {
+            status.tests += 1;
+            status.test = None;
+        });
         TestTake(self.clone())
+    }
+
+    pub fn set_test_result(&self, dictation: Dictation) {
+        self.update(|status| status.test = Some(Ok(dictation)));
     }
 }
 
 impl Drop for TestTake {
     fn drop(&mut self) {
-        self.0.update(|status| status.tests -= 1);
+        self.0.update(|status| {
+            status.tests -= 1;
+            if status.test.is_none() {
+                let reason = status.notice.as_ref().map_or_else(
+                    || "The test stopped before it was transcribed.".to_string(),
+                    |notice| notice.text.clone(),
+                );
+                status.test = Some(Err(reason));
+            }
+        });
     }
 }
 

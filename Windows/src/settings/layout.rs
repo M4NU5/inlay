@@ -554,7 +554,17 @@ impl Builder {
                 self.place(id, control, field, theme::SURFACE);
                 right = field.left - px(16);
             } else {
-                let placed = self.place_right(id, control, right, middle, theme::SURFACE);
+                // Never wider than the label leaves, so the label stays readable.
+                let (width, height) = control.size();
+                let room = right - (label_left + label_width + px(16));
+                let width = width.min(room.max(px(60)));
+                let placed = RECT {
+                    left: right - width,
+                    top: middle - height / 2,
+                    right,
+                    bottom: middle - height / 2 + height,
+                };
+                self.place(id, control, placed, theme::SURFACE);
                 right = placed.left - px(12);
             }
         }

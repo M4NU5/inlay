@@ -353,12 +353,13 @@ fn report_test(app: &App, record: &Generation, seconds: f64) -> (&'static str, S
         "Test complete. Nothing was pasted."
     };
     app.note(outcome);
-    app.set_last(Dictation {
+    let dictation = Dictation {
         text,
         outcome: outcome.into(),
         seconds,
-        test: true,
-    });
+    };
+    app.set_last(dictation.clone());
+    app.set_test_result(dictation);
     ("tested", outcome.into())
 }
 
@@ -378,7 +379,6 @@ fn deliver(app: &App, record: &Generation, seconds: f64) -> (&'static str, Strin
             text: shown_text(record),
             outcome: outcome.into(),
             seconds,
-            test: false,
         })
     };
     if record.insertion_text.is_empty() {
