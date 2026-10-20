@@ -65,6 +65,8 @@ pub struct Status {
     pub processing: usize,
     /// Test takes recording or transcribing, for the Microphone page.
     pub tests: usize,
+    /// Takes finished so far, so History knows to load again.
+    pub finished: u64,
     /// The latest test's transcript, or why it stopped without one.
     pub test: Option<Result<Dictation, String>>,
     /// The take number of the latest test. Only it may set `test`.
@@ -99,6 +101,7 @@ impl App {
                 tests: 0,
                 test: None,
                 latest_test: 0,
+                finished: 0,
                 notice: None,
                 last: None,
                 error: None,
@@ -205,7 +208,10 @@ impl App {
     }
 
     pub fn set_last(&self, dictation: Dictation) {
-        self.update(|status| status.last = Some(dictation));
+        self.update(|status| {
+            status.last = Some(dictation);
+            status.finished += 1;
+        });
     }
 
     /// Copies the last dictation, from the tray menu or the Dictation page.

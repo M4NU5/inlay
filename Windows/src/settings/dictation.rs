@@ -2,7 +2,7 @@
 //! last dictation with Copy, as on the Mac's home page.
 
 use super::layout::{Builder, Control, Icon, Item};
-use super::{CHECK, COPY, Context, GEAR, TEST, server_line, test_button};
+use super::{CHECK, COPY, Context, GEAR, HISTORY, TEST, server_line, test_button};
 use crate::app::Server;
 use crate::hotkey;
 use crate::theme::{self, Font, px};
@@ -35,6 +35,7 @@ pub fn build(page: &mut Builder, context: &Context) {
 
     page.actions(vec![
         (TEST, test_button(context)),
+        (HISTORY, Control::button("History")),
         (GEAR, Control::icon(Icon::Gear, "This PC settings")),
     ]);
 }

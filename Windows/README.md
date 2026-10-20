@@ -61,7 +61,9 @@ No installer or administrator rights are needed.
 
 ## Configure
 
-Choose **Open Inlay…** from the tray menu. The window follows the Mac app: a sidebar with **Dictation**, **Microphone** and **This PC** pages. Changes apply as you make them, except the connection, which applies when you select **Connect**.
+Choose **Open Inlay…** from the tray menu. The window follows the Mac app: a sidebar with **Dictation**, **History**, **Microphone** and **This PC** pages. Changes apply as you make them, except the connection, which applies when you select **Connect**.
+
+**History** lists shared history from the server, newest first, filtered by device and source. Select a dictation to read its transcript and the original one, copy it, delete it from the server, or open its audio in your default player. **Load older** fetches the next 50.
 
 | Page       | Setting                    | Notes                                                                                                                                                |
 | ---------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -101,7 +103,7 @@ The flow matches the Mac client and [`docs/client-server-contract.md`](../docs/c
 - **No list continuation.** It needs a confirmed cursor position, which plain paste can't provide, so the client never sends `continuationID`.
 - **Original audio** is a 16 kHz mono copy, not the microphone's native format.
 - **Only keys cancel a hold.** Mouse clicks while holding don't.
-- **Not included yet:** history, server preferences, microphone priority lists, Wispr Flow import, output muting while recording.
+- **Not included yet:** server preferences, microphone priority lists, Wispr Flow import, output muting while recording.
 
 ## Troubleshooting
 

@@ -13,6 +13,9 @@ use std::{fmt, thread};
 pub const API_VERSION: u64 = 2;
 const RESPONSE_LIMIT: u64 = 16 * 1024 * 1024;
 const EVENT_LINE_LIMIT: u64 = 2 * 1024 * 1024;
+/// A recording's audio is at most 180 seconds; original audio can be stereo
+/// at a high rate, so allow well over that.
+const ARTIFACT_LIMIT: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum ApiError {
@@ -106,6 +109,86 @@ pub struct Preferences {
 
 fn enabled() -> bool {
     true
+}
+
+/// A generation as shared history shows it. Only the fields the History page
+/// reads; the server sends more.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Record {
+    pub id: String,
+    pub device: Device,
+    pub status: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub final_text: String,
+    #[serde(default)]
+    pub raw_text: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub inference_audio: Option<Audio>,
+    #[serde(default)]
+    pub original_audio: Option<Audio>,
+    #[serde(default)]
+    pub speech: Option<Model>,
+    #[serde(default)]
+    pub imported_source: Option<Imported>,
+}
+
+impl Record {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self.status.as_str(), "completed" | "failed" | "cancelled")
+    }
+
+    /// The recording's length, from its audio or the imported source.
+    pub fn seconds(&self) -> f64 {
+        match (&self.inference_audio, &self.imported_source) {
+            (Some(audio), _) if audio.sample_rate > 0 => {
+                audio.frame_count as f64 / audio.sample_rate as f64
+            }
+            (_, Some(source)) => source.duration_seconds.unwrap_or(0.0),
+            _ => 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Audio {
+    pub sample_rate: u64,
+    pub frame_count: u64,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Model {
+    #[serde(rename = "modelID")]
+    pub model_id: String,
+    pub backend: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Imported {
+    #[serde(default)]
+    pub source_status: Option<String>,
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+}
+
+/// One page of shared history, newest first.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPage {
+    pub items: Vec<Record>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -242,6 +325,49 @@ impl Api {
                 result => return result,
             }
         }
+    }
+
+    /// Fifty records of shared history, older than `before` when given.
+    /// `source` is `inlay` or `wispr-flow`; `None` lists both.
+    pub fn history(
+        &self,
+        before: Option<&str>,
+        source: Option<&str>,
+    ) -> Result<HistoryPage, ApiError> {
+        let mut request = self.request("GET", "v1/generations").query("limit", "50");
+        if let Some(before) = before {
+            request = request.query("before", before);
+        }
+        if let Some(source) = source {
+            request = request.query("source", source);
+        }
+        decode(send(request, Body::Empty)?)
+    }
+
+    /// Removes a finished generation and its files from shared history.
+    pub fn delete(&self, id: &str) -> Result<(), ApiError> {
+        send(
+            self.request("DELETE", &format!("v1/generations/{id}")),
+            Body::Empty,
+        )
+        .map(drop)
+    }
+
+    /// Downloads one of a generation's files, such as `inference.wav`.
+    pub fn artifact(&self, id: &str, filename: &str) -> Result<Vec<u8>, ApiError> {
+        let request = self
+            .request("GET", &format!("v1/generations/{id}/artifacts/{filename}"))
+            .set("Accept", "*/*");
+        let mut body = Vec::new();
+        send(request, Body::Empty)?
+            .into_reader()
+            .take(ARTIFACT_LIMIT + 1)
+            .read_to_end(&mut body)
+            .map_err(|_| ApiError::Disconnected)?;
+        if body.len() as u64 > ARTIFACT_LIMIT {
+            return Err(ApiError::Invalid("file too large".into()));
+        }
+        Ok(body)
     }
 
     pub fn generation(&self, id: &str) -> Result<Generation, ApiError> {
