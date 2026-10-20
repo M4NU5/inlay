@@ -3,13 +3,20 @@
 use crate::api::{API_VERSION, Api};
 use crate::config::Config;
 use crate::controller::Event;
-use crate::{hotkey, tray};
+use crate::{hotkey, paste, tray};
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 static SHARED: OnceLock<Arc<App>> = OnceLock::new();
+
+thread_local! {
+    /// The last notice raised on this thread. Each take runs on its own
+    /// thread, so a test's failure reason can't be mixed up with another take's.
+    static LAST_NOTICE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
 
 /// Makes the app reachable from Win32 window procedures, which take no context.
 pub fn install(app: Arc<App>) {
@@ -41,12 +48,33 @@ pub struct Notice {
     pub until: Instant,
 }
 
+/// The latest finished take, for the Dictation page and Copy last message.
+#[derive(Clone)]
+pub struct Dictation {
+    pub text: String,
+    /// What became of it, such as "Pasted at your cursor".
+    pub outcome: String,
+    pub seconds: f64,
+}
+
 pub struct Status {
     pub server: Server,
     pub recording: bool,
+    /// The current recording is a microphone test, which never pastes.
+    pub testing: bool,
     pub processing: usize,
+    /// Test takes recording or transcribing, for the Microphone page.
+    pub tests: usize,
+    /// Takes finished so far, so History knows to load again.
+    pub finished: u64,
+    /// The latest test's transcript, or why it stopped without one.
+    pub test: Option<Result<Dictation, String>>,
+    /// The take number of the latest test. Only it may set `test`.
+    pub latest_test: u64,
     pub notice: Option<Notice>,
-    pub last_transcript: Option<String>,
+    pub last: Option<Dictation>,
+    /// Why the latest take failed. Cleared when the next one starts.
+    pub error: Option<String>,
     /// When the microphone opened for the current take. `None` while it starts.
     pub capturing_since: Option<Instant>,
     /// When the last transcript was pasted, for the recording pill.
@@ -68,9 +96,15 @@ impl App {
             status: Mutex::new(Status {
                 server: Server::Checking,
                 recording: false,
+                testing: false,
                 processing: 0,
+                tests: 0,
+                test: None,
+                latest_test: 0,
+                finished: 0,
                 notice: None,
-                last_transcript: None,
+                last: None,
+                error: None,
                 capturing_since: None,
                 pasted_at: None,
             }),
@@ -87,6 +121,27 @@ impl App {
     pub fn apply_settings(&self, settings: Settings) {
         hotkey::set_key(hotkey::key(&settings.config.hotkey).vk);
         *lock(&self.settings) = settings;
+        self.recheck();
+    }
+
+    /// Saves a change to this PC's settings that does not affect the server
+    /// connection, and applies it straight away.
+    pub fn change_config(&self, change: impl FnOnce(&mut Config)) -> Result<(), String> {
+        let mut settings = lock(&self.settings);
+        let mut config = settings.config.clone();
+        change(&mut config);
+        config
+            .save()
+            .map_err(|error| format!("Could not save settings: {error}"))?;
+        hotkey::set_key(hotkey::key(&config.hotkey).vk);
+        settings.config = config;
+        drop(settings);
+        tray::refresh();
+        Ok(())
+    }
+
+    /// Checks the server again now, instead of waiting for the next poll.
+    pub fn recheck(&self) {
         self.update(|status| status.server = Server::Checking);
         let _ = self.wake_monitor.send(());
     }
@@ -100,12 +155,14 @@ impl App {
         tray::refresh();
     }
 
-    pub fn set_recording(&self, recording: bool) {
+    pub fn set_recording(&self, recording: bool, test: bool) {
         self.update(|status| {
             status.recording = recording;
+            status.testing = recording && test;
             status.capturing_since = None;
-            // A new take replaces the last one's tick.
             if recording {
+                status.error = None;
+                // A new take replaces the last one's tick.
                 status.pasted_at = None;
             }
         });
@@ -135,11 +192,13 @@ impl App {
     /// A take failed: shown in the tooltip and as a notification.
     pub fn fail(&self, text: &str) {
         log!("error: {text}");
+        lock(&self.status).error = Some(text.to_string());
         self.notice(text, true, Duration::from_secs(10));
         tray::notify_error();
     }
 
     fn notice(&self, text: &str, error: bool, lifetime: Duration) {
+        LAST_NOTICE.with(|last| *last.borrow_mut() = Some(text.to_string()));
         let notice = Notice {
             text: text.to_string(),
             error,
@@ -148,8 +207,32 @@ impl App {
         self.update(|status| status.notice = Some(notice));
     }
 
-    pub fn set_last_transcript(&self, text: &str) {
-        self.update(|status| status.last_transcript = Some(text.to_string()));
+    pub fn set_last(&self, dictation: Dictation) {
+        self.update(|status| {
+            status.last = Some(dictation);
+            status.finished += 1;
+        });
+    }
+
+    /// Copies the last dictation, from the tray menu or the Dictation page.
+    pub fn copy_last(&self) {
+        let Some(text) = self
+            .status(|status| status.last.as_ref().map(|last| last.text.clone()))
+            .filter(|text| !text.is_empty())
+        else {
+            return;
+        };
+        match paste::copy(&text) {
+            Ok(()) => {
+                self.update(|status| {
+                    if let Some(last) = &mut status.last {
+                        last.outcome = "Copied to clipboard".into();
+                    }
+                });
+                self.note("Copied the last message.");
+            }
+            Err(message) => self.fail(&message),
+        }
     }
 
     /// Admission check before a take. Uses the monitor's last answer when the
@@ -182,6 +265,46 @@ impl App {
             }
             self.update(|status| status.server = server);
         }
+    }
+}
+
+/// Counts test take `take` as running, from its start until its result is
+/// shown. A test that ends without a transcript keeps the reason it gave. An
+/// earlier test still transcribing never replaces a later one's result.
+pub struct TestTake(Arc<App>, u64);
+
+impl App {
+    pub fn test_take(self: &Arc<Self>, take: u64) -> TestTake {
+        self.update(|status| {
+            status.tests += 1;
+            status.test = None;
+            status.latest_test = take;
+        });
+        TestTake(self.clone(), take)
+    }
+
+    pub fn set_test_result(&self, take: u64, dictation: Dictation) {
+        self.update(|status| {
+            if status.latest_test == take {
+                status.test = Some(Ok(dictation));
+            }
+        });
+    }
+}
+
+impl Drop for TestTake {
+    fn drop(&mut self) {
+        // Dropped on the take's own thread, so this is the test's own reason.
+        let reason = LAST_NOTICE
+            .with(|last| last.borrow_mut().take())
+            .unwrap_or_else(|| "The test stopped before it was transcribed.".into());
+        let take = self.1;
+        self.0.update(|status| {
+            status.tests -= 1;
+            if status.latest_test == take && status.test.is_none() {
+                status.test = Some(Err(reason));
+            }
+        });
     }
 }
 

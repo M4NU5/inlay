@@ -7,7 +7,7 @@ use crate::icons::{self, Look};
 use crate::menu::{self, Anchor, Entry, Header};
 use crate::theme::{self, px};
 use crate::win::{fill, wide};
-use crate::{hotkey, overlay, paste, settings};
+use crate::{hotkey, overlay, settings};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
@@ -32,7 +32,7 @@ const WM_REFRESH: u32 = WM_APP + 2;
 const WM_NOTIFY_ERROR: u32 = WM_APP + 3;
 const NOTICE_TIMER: usize = 1;
 const ID_COPY: usize = 11;
-const ID_SETTINGS: usize = 12;
+const ID_OPEN: usize = 12;
 const ID_QUIT: usize = 13;
 
 /// Asks the UI thread to redraw the icon and tooltip. Safe from any thread.
@@ -52,7 +52,8 @@ fn post(message: u32) {
     }
 }
 
-/// Runs the UI thread's message loop. `first_run` opens settings straight away.
+/// Runs the UI thread's message loop. `first_run` opens the This PC page
+/// straight away, where the server connection is set up.
 pub fn run(first_run: bool) -> Result<(), String> {
     unsafe {
         let instance = GetModuleHandleW(null());
@@ -94,7 +95,7 @@ pub fn run(first_run: bool) -> Result<(), String> {
         WINDOW.store(window, Ordering::SeqCst);
         add_icon(window);
         if first_run {
-            settings::open();
+            settings::open(settings::Page::ThisPc);
         }
         let mut message: MSG = std::mem::zeroed();
         while GetMessageW(&mut message, null_mut(), 0, 0) > 0 {
@@ -141,8 +142,8 @@ unsafe extern "system" fn window_proc(
         }
         WM_COMMAND => {
             match wparam & 0xFFFF {
-                ID_COPY => copy_last(),
-                ID_SETTINGS => settings::open(),
+                ID_COPY => app::shared().copy_last(),
+                ID_OPEN => settings::open(settings::Page::Dictation),
                 ID_QUIT => quit(window),
                 _ => {}
             }
@@ -243,11 +244,7 @@ fn header(app: &App) -> Header {
     Header {
         state: state.into(),
         dot,
-        message: if ready {
-            format!("Hold {key} to dictate")
-        } else {
-            text
-        },
+        message: if ready { format!("Hold {key}") } else { text },
         ready,
     }
 }
@@ -301,7 +298,12 @@ fn show_menu(window: HWND) {
         return;
     }
     let app = app::shared();
-    let has_transcript = app.status(|status| status.last_transcript.is_some());
+    let has_transcript = app.status(|status| {
+        status
+            .last
+            .as_ref()
+            .is_some_and(|last| !last.text.is_empty())
+    });
     let item = |id, label: &str, enabled| Entry::Item {
         id,
         label: label.into(),
@@ -309,23 +311,12 @@ fn show_menu(window: HWND) {
         checked: false,
     };
     let entries = vec![
-        item(ID_COPY, "Copy last transcript", has_transcript),
-        item(ID_SETTINGS, "Settings…", true),
+        item(ID_COPY, "Copy last message", has_transcript),
+        item(ID_OPEN, "Open Inlay…", true),
         Entry::Separator,
         item(ID_QUIT, "Quit Inlay", true),
     ];
-    menu::show(window, Some(header(app)), entries, px(300), Anchor::Cursor);
-}
-
-fn copy_last() {
-    let app = app::shared();
-    let Some(text) = app.status(|status| status.last_transcript.clone()) else {
-        return;
-    };
-    match paste::copy(&text) {
-        Ok(()) => app.note("Copied the last transcript."),
-        Err(message) => app.fail(&message),
-    }
+    menu::show(window, Some(header(app)), entries, px(240), Anchor::Cursor);
 }
 
 fn quit(window: HWND) {

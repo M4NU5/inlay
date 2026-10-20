@@ -22,8 +22,8 @@ pub enum Stop {
 
 pub type Notify = Arc<dyn Fn(Stop) + Send + Sync>;
 
-/// The microphone's smoothed loudness, 0 to 1, for the recording pill. It
-/// matches the Mac client's meter: -68 to -18 dBFS, a fast rise and a slower fall.
+/// The microphone's smoothed loudness, 0 to 1, for the recording pill: -55
+/// to -5 dBFS, with a fast rise and a quick fall.
 static LEVEL: AtomicU32 = AtomicU32::new(0);
 
 pub fn level() -> f32 {
@@ -38,6 +38,13 @@ pub fn input_names() -> Vec<String> {
             Vec::new()
         }
     }
+}
+
+/// The name of Windows' default input, if there is one.
+pub fn default_input_name() -> Option<String> {
+    cpal::default_host()
+        .default_input_device()
+        .map(|device| device.to_string())
 }
 
 pub struct Recording {
@@ -174,14 +181,18 @@ impl Sink {
             let power = self.mono.iter().map(|sample| sample * sample).sum::<f32>()
                 / self.mono.len() as f32;
             let rms = power.sqrt();
+            // -55 to -5 dBFS. The Mac's -68 to -18 pinned every bar at full
+            // height with hot inputs such as speakerphones, so speech showed
+            // as one solid band instead of following the syllables.
             let target = if rms > 0.0 {
-                ((20.0 * rms.log10() + 68.0) / 50.0).clamp(0.0, 1.0)
+                ((20.0 * rms.log10() + 55.0) / 50.0).clamp(0.0, 1.0)
             } else {
                 0.0
             };
             // Timing comes from the samples, not from how often buffers arrive.
+            // A quick release lets the gaps between syllables show.
             let seconds = self.mono.len() as f32 / self.rate;
-            let constant = if target > self.level { 0.020 } else { 0.130 };
+            let constant = if target > self.level { 0.020 } else { 0.060 };
             self.level += (target - self.level) * -(-seconds / constant).exp_m1();
             if target == 0.0 && self.level < 0.02 {
                 self.level = 0.0;

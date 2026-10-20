@@ -1,6 +1,7 @@
 //! The hold-to-talk state machine. An accepted hold starts a take and its
 //! release finishes it. Takes run on their own threads, so a new hold can start
-//! while earlier takes are still uploading or transcribing.
+//! while earlier takes are still uploading or transcribing. The window's Test
+//! microphone button starts and finishes a test take the same way.
 
 use crate::app::App;
 use crate::hotkey::{self, Edge};
@@ -13,6 +14,8 @@ pub enum Event {
     Hotkey(Edge),
     /// A take stopped recording on its own: time limit, error or cancellation.
     TakeEnded(u64),
+    /// Test microphone: start a test take, or finish the one recording.
+    Test,
     /// Quit: cancel any recording, then acknowledge.
     Quit(Sender<()>),
 }
@@ -30,6 +33,8 @@ enum Phase {
     /// The hold turned into a shortcut or its take ended; wait for release.
     Blocked,
     Recording(take::Handle),
+    /// A microphone test, finished by a second `Test`. The hold key is ignored.
+    Testing(take::Handle),
 }
 
 pub fn run(app: Arc<App>, events: Receiver<Event>) {
@@ -38,7 +43,7 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
     let mut missed_releases = 0;
     loop {
         let timeout = match &phase {
-            Phase::Idle => None,
+            Phase::Idle | Phase::Testing(_) => None,
             Phase::Pending(since) => {
                 Some(ACCEPT_DELAY.saturating_sub(since.elapsed()).min(WATCHDOG))
             }
@@ -57,7 +62,7 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
         };
         let event = match event {
             Some(Event::Quit(done)) => {
-                if let Phase::Recording(take) = phase {
+                if let Phase::Recording(take) | Phase::Testing(take) = phase {
                     take.cancel_and_wait("Inlay quit while recording.");
                 }
                 let _ = done.send(());
@@ -65,7 +70,9 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
             }
             Some(event) => Some(event),
             // Watchdog tick: the hook may have missed the key-up.
-            None if !matches!(phase, Phase::Idle) && !hotkey::is_down(hotkey::current_key()) => {
+            None if !matches!(phase, Phase::Idle | Phase::Testing(_))
+                && !hotkey::is_down(hotkey::current_key()) =>
+            {
                 missed_releases += 1;
                 if missed_releases < 2 {
                     None
@@ -107,8 +114,18 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
             (Phase::Pending(since), None) if since.elapsed() >= ACCEPT_DELAY => {
                 takes += 1;
                 log!("hotkey: hold accepted; starting take {takes}");
-                Phase::Recording(take::start(takes, app.clone()))
+                Phase::Recording(take::start(takes, app.clone(), false))
             }
+            (Phase::Idle, Some(Event::Test)) => {
+                takes += 1;
+                log!("test: starting take {takes}");
+                Phase::Testing(take::start(takes, app.clone(), true))
+            }
+            (Phase::Testing(take), Some(Event::Test)) => {
+                take.release();
+                Phase::Idle
+            }
+            (Phase::Testing(take), Some(Event::TakeEnded(id))) if take.id == id => Phase::Idle,
             (phase, _) => phase,
         };
     }

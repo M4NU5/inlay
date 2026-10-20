@@ -17,13 +17,19 @@ use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
 // Colours are 0xRRGGBB, from the Mac app's Glacier palette. Canvas methods also
 // take 0xAARRGGBB for translucent shapes.
 pub const CANVAS: u32 = 0x1B252E;
-pub const SIDEBAR: u32 = 0x151E26;
+/// The main window's sidebar, lighter than the page as on the Mac.
+pub const SIDEBAR: u32 = 0x2F3D4C;
+pub const SIDEBAR_HOVER: u32 = 0x35444F;
+pub const SIDEBAR_SELECTED: u32 = 0x3A4A5A;
+pub const SIDEBAR_EDGE: u32 = 0x3F5A77;
 pub const SURFACE: u32 = 0x222C35;
 pub const FIELD: u32 = 0x18212A;
 pub const LINE: u32 = 0x2E3F4D;
 pub const HOVER: u32 = 0x2B3E4D;
 pub const RAISED: u32 = 0x3A5265;
 pub const TINT: u32 = 0x223949;
+/// A boxed choice, such as the microphone picker.
+pub const BOX: u32 = 0x343C44;
 pub const INK: u32 = 0xEDF5FA;
 pub const MUTED: u32 = 0xA4B8C7;
 pub const FAINT: u32 = 0x6F8798;
@@ -108,9 +114,11 @@ pub enum Font {
     Body,
     Strong,
     Small,
-    SmallStrong,
+    /// Page headings, as the Mac app's semibold titles.
     Title,
     Wordmark,
+    /// The Dictation page's "Hold to dictate."
+    Hero,
 }
 
 pub fn font(font: Font) -> HFONT {
@@ -120,9 +128,9 @@ pub fn font(font: Font) -> HFONT {
             ("Segoe UI", 14, 400),
             ("Segoe UI", 14, 600),
             ("Segoe UI", 12, 400),
-            ("Segoe UI", 12, 600),
-            ("Georgia", 24, 400),
-            ("Georgia", 22, 400),
+            ("Segoe UI", 26, 600),
+            ("Georgia", 26, 400),
+            ("Segoe UI", 28, 500),
         ]
         .map(|(face, size, weight)| {
             let mut description: LOGFONTW = unsafe { std::mem::zeroed() };
@@ -196,6 +204,10 @@ pub fn buffered(dc: HDC, area: RECT, draw: impl FnOnce(&Canvas, RECT)) {
 
 /// Measures wrapped text in a given width. Returns its height.
 pub fn text_height(text: &str, font: Font, width: i32, flags: u32) -> i32 {
+    // An empty Vec's pointer is a dangling placeholder that DrawTextW may read.
+    if text.is_empty() {
+        return 0;
+    }
     unsafe {
         let dc = GetDC(null_mut());
         let previous = SelectObject(dc, self::font(font));
@@ -221,6 +233,9 @@ pub fn text_height(text: &str, font: Font, width: i32, flags: u32) -> i32 {
 
 /// The width `text` takes on one line, measured on the screen.
 pub fn text_width(text: &str, font: Font) -> i32 {
+    if text.is_empty() {
+        return 0;
+    }
     let units: Vec<u16> = text.encode_utf16().collect();
     let mut area = RECT {
         left: 0,
@@ -486,19 +501,6 @@ impl Canvas {
         self.lines(&[at(12.0, 17.5), at(12.0, 21.0)], rgb, width);
     }
 
-    pub fn chevron(&self, center_x: f32, center_y: f32, size: f32, rgb: u32) {
-        let half = size / 2.0;
-        self.lines(
-            &[
-                (center_x - half, center_y - half / 2.0),
-                (center_x, center_y + half / 2.0),
-                (center_x + half, center_y - half / 2.0),
-            ],
-            rgb,
-            1.5 * scale(),
-        );
-    }
-
     pub fn check(&self, center_x: f32, center_y: f32, size: f32, rgb: u32) {
         let half = size / 2.0;
         self.lines(
@@ -512,7 +514,185 @@ impl Canvas {
         );
     }
 
+    /// Uneven vertical bars, the Dictation page's icon, `size` pixels square.
+    pub fn waveform(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let middle = y as f32 + 12.0 * unit;
+        for (index, height) in [5.0, 11.0, 7.0, 17.0, 9.0, 13.0, 5.0].iter().enumerate() {
+            let left = x as f32 + (3.0 + index as f32 * 3.0) * unit;
+            self.lines(
+                &[
+                    (left, middle - height / 2.0 * unit),
+                    (left, middle + height / 2.0 * unit),
+                ],
+                rgb,
+                1.6 * unit,
+            );
+        }
+    }
+
+    /// A laptop outline, the This PC page's icon, `size` pixels square.
+    pub fn laptop(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        let screen = RECT {
+            left: (x as f32 + 4.5 * unit).round() as i32,
+            top: (y as f32 + 5.0 * unit).round() as i32,
+            right: (x as f32 + 19.5 * unit).round() as i32,
+            bottom: (y as f32 + 16.0 * unit).round() as i32,
+        };
+        self.outline(screen, 1.5 * unit, rgb, 1.8 * unit);
+        self.lines(&[at(2.0, 19.0), at(22.0, 19.0)], rgb, 2.0 * unit);
+    }
+
+    /// Two overlapping pages, the Copy icon, `size` pixels square.
+    pub fn copy(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        let front = RECT {
+            left: (x as f32 + 4.0 * unit).round() as i32,
+            top: (y as f32 + 8.0 * unit).round() as i32,
+            right: (x as f32 + 16.0 * unit).round() as i32,
+            bottom: (y as f32 + 21.0 * unit).round() as i32,
+        };
+        self.outline(front, 2.0 * unit, rgb, 1.7 * unit);
+        self.lines(
+            &[
+                at(8.5, 7.0),
+                at(8.5, 3.5),
+                at(20.0, 3.5),
+                at(20.0, 16.5),
+                at(17.0, 16.5),
+            ],
+            rgb,
+            1.7 * unit,
+        );
+    }
+
+    /// A cog, the button that opens This PC, `size` pixels square.
+    pub fn gear(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let (cx, cy) = (x as f32 + 12.0 * unit, y as f32 + 12.0 * unit);
+        self.arc((cx, cy), 6.5 * unit, (0.0, 360.0), rgb, 1.8 * unit);
+        self.arc((cx, cy), 2.6 * unit, (0.0, 360.0), rgb, 1.6 * unit);
+        for tooth in 0..8 {
+            let angle = tooth as f32 * std::f32::consts::FRAC_PI_4;
+            let (sin, cos) = angle.sin_cos();
+            self.lines(
+                &[
+                    (cx + cos * 7.2 * unit, cy + sin * 7.2 * unit),
+                    (cx + cos * 9.6 * unit, cy + sin * 9.6 * unit),
+                ],
+                rgb,
+                2.6 * unit,
+            );
+        }
+    }
+
+    /// A clock with an arrow running round it, the History page's icon.
+    pub fn clock(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let (cx, cy) = (x as f32 + 12.0 * unit, y as f32 + 12.0 * unit);
+        let width = 1.8 * unit;
+        self.arc((cx, cy), 8.5 * unit, (200.0, 300.0), rgb, width);
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        self.lines(&[at(2.2, 6.5), at(3.8, 10.2), at(7.4, 8.6)], rgb, width);
+        self.lines(&[at(12.0, 7.5), at(12.0, 12.0), at(15.0, 14.0)], rgb, width);
+    }
+
+    /// A circular arrow, the Refresh icon.
+    pub fn refresh(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let (cx, cy) = (x as f32 + 12.0 * unit, y as f32 + 12.0 * unit);
+        let width = 1.8 * unit;
+        self.arc((cx, cy), 7.5 * unit, (-60.0, 300.0), rgb, width);
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        self.lines(&[at(12.8, 2.0), at(16.2, 5.0), at(12.6, 7.6)], rgb, width);
+    }
+
+    /// A bin, the Delete icon.
+    pub fn trash(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        let width = 1.7 * unit;
+        self.lines(&[at(4.0, 6.5), at(20.0, 6.5)], rgb, width);
+        self.lines(
+            &[at(9.0, 6.5), at(9.5, 3.5), at(14.5, 3.5), at(15.0, 6.5)],
+            rgb,
+            width,
+        );
+        self.lines(
+            &[at(6.0, 6.5), at(7.2, 20.5), at(16.8, 20.5), at(18.0, 6.5)],
+            rgb,
+            width,
+        );
+        self.lines(&[at(10.0, 10.0), at(10.3, 17.0)], rgb, width);
+        self.lines(&[at(14.0, 10.0), at(13.7, 17.0)], rgb, width);
+    }
+
+    /// Lines of text, for an empty detail pane.
+    pub fn paragraph(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        for (row, end) in [(5.0, 21.0), (10.0, 15.0), (15.0, 21.0), (20.0, 15.0)] {
+            self.lines(&[at(3.0, row), at(end, row)], rgb, 1.8 * unit);
+        }
+    }
+
+    /// Limits later drawing, shapes and text, to `area`. `None` lifts the limit.
+    pub fn clip(&self, area: Option<RECT>) {
+        unsafe {
+            match area {
+                Some(area) => {
+                    GdipSetClipRectI(
+                        self.graphics,
+                        area.left,
+                        area.top,
+                        area.right - area.left,
+                        area.bottom - area.top,
+                        CombineModeReplace,
+                    );
+                    SelectClipRgn(self.dc, null_mut());
+                    IntersectClipRect(self.dc, area.left, area.top, area.right, area.bottom);
+                }
+                None => {
+                    GdipResetClip(self.graphics);
+                    SelectClipRgn(self.dc, null_mut());
+                }
+            }
+        }
+    }
+
+    /// The small up-and-down chevrons beside a choice's value.
+    pub fn updown(&self, center_x: f32, center_y: f32, size: f32, rgb: u32) {
+        let half = size / 2.0;
+        let gap = size * 0.28;
+        let width = 1.5 * scale();
+        self.lines(
+            &[
+                (center_x - half, center_y - gap),
+                (center_x, center_y - gap - half),
+                (center_x + half, center_y - gap),
+            ],
+            rgb,
+            width,
+        );
+        self.lines(
+            &[
+                (center_x - half, center_y + gap),
+                (center_x, center_y + gap + half),
+                (center_x + half, center_y + gap),
+            ],
+            rgb,
+            width,
+        );
+    }
+
     pub fn text(&self, text: &str, area: RECT, font: Font, rgb: u32, flags: u32) {
+        // An empty Vec's pointer is a dangling placeholder that DrawTextW may read.
+        if text.is_empty() {
+            return;
+        }
         let units: Vec<u16> = text.encode_utf16().collect();
         let mut area = area;
         unsafe {
@@ -531,6 +711,9 @@ impl Canvas {
 
     /// The width `text` takes on one line.
     pub fn text_width(&self, text: &str, font: Font) -> i32 {
+        if text.is_empty() {
+            return 0;
+        }
         let units: Vec<u16> = text.encode_utf16().collect();
         let mut area = RECT {
             left: 0,

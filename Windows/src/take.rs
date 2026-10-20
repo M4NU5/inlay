@@ -1,9 +1,10 @@
 //! One dictation take, following the Mac client's flow: admission, capture with
 //! acknowledged uploads while recording, finish with exact frame counts, NDJSON
 //! progress, an ordered paste of `insertionText`, then the delivery receipt.
+//! A microphone test runs the same flow but never pastes.
 
 use crate::api::{Api, ApiError, Generation};
-use crate::app::{App, Ticket};
+use crate::app::{App, Dictation, Ticket};
 use crate::audio::{self, SAMPLE_RATE, Stop};
 use crate::controller::Event;
 use crate::{hotkey, paste};
@@ -51,18 +52,21 @@ impl Handle {
     }
 }
 
-pub fn start(id: u64, app: Arc<App>) -> Handle {
+/// Starts a take. A `test` take records until `release`, like a hold, and
+/// shows its transcript without pasting it.
+pub fn start(id: u64, app: Arc<App>, test: bool) -> Handle {
     let (signals, inbox) = mpsc::channel();
     let own = signals.clone();
     let thread = thread::Builder::new()
         .name(format!("take-{id}"))
         .spawn(move || {
-            app.set_recording(true);
-            let released = record(&app, &inbox, &own);
-            app.set_recording(false);
+            let _test = test.then(|| app.test_take(id));
+            app.set_recording(true, test);
+            let released = record(&app, &inbox, &own, test);
+            app.set_recording(false, test);
             let _ = app.events.send(Event::TakeEnded(id));
             if let Some(released) = released {
-                process(&app, released);
+                process(&app, released, id);
             }
         })
         .expect("cannot start a take thread");
@@ -80,9 +84,15 @@ struct Released {
     uploader: JoinHandle<Result<u64, ApiError>>,
     keep_original: bool,
     ticket: Ticket,
+    test: bool,
 }
 
-fn record(app: &Arc<App>, inbox: &Receiver<Signal>, own: &Sender<Signal>) -> Option<Released> {
+fn record(
+    app: &Arc<App>,
+    inbox: &Receiver<Signal>,
+    own: &Sender<Signal>,
+    test: bool,
+) -> Option<Released> {
     let settings = app.settings();
     let api = match Api::new(&settings.config.endpoint, &settings.token) {
         Ok(api) => api,
@@ -101,6 +111,7 @@ fn record(app: &Arc<App>, inbox: &Receiver<Signal>, own: &Sender<Signal>) -> Opt
         &request_id,
         &settings.config.device_id,
         &settings.config.device_name,
+        if test { "test" } else { "dictation" },
     ) {
         Ok(created) => created,
         Err(error) => {
@@ -121,7 +132,7 @@ fn record(app: &Arc<App>, inbox: &Receiver<Signal>, own: &Sender<Signal>) -> Opt
     // A hold released during admission is too short to keep.
     if let Ok(signal) = inbox.try_recv() {
         cancel_quietly(&api, &generation);
-        stopped_early(app, signal);
+        stopped_early(app, signal, test);
         return None;
     }
 
@@ -171,14 +182,14 @@ fn record(app: &Arc<App>, inbox: &Receiver<Signal>, own: &Sender<Signal>) -> Opt
         other => {
             cancel_quietly(&api, &generation);
             let _ = uploader.join();
-            stopped_early(app, other);
+            stopped_early(app, other, test);
             return None;
         }
     }
     if frames < MIN_FRAMES {
         cancel_quietly(&api, &generation);
         let _ = uploader.join();
-        app.note("Too short to transcribe. Hold the key while you speak.");
+        app.note(too_short(test));
         return None;
     }
     log!(
@@ -191,16 +202,23 @@ fn record(app: &Arc<App>, inbox: &Receiver<Signal>, own: &Sender<Signal>) -> Opt
         uploader,
         keep_original,
         ticket: app.deliveries.issue(),
+        test,
     })
 }
 
-fn stopped_early(app: &App, signal: Signal) {
+fn too_short(test: bool) -> &'static str {
+    if test {
+        "Too short to transcribe. Speak for a moment before finishing the test."
+    } else {
+        "Too short to transcribe. Hold the key while you speak."
+    }
+}
+
+fn stopped_early(app: &App, signal: Signal, test: bool) {
     match signal {
         Signal::Failed(message) => app.fail(&message),
         Signal::Cancel(reason) => app.note(&reason),
-        Signal::Release | Signal::Limit => {
-            app.note("Too short to transcribe. Hold the key while you speak.")
-        }
+        Signal::Release | Signal::Limit => app.note(too_short(test)),
     }
 }
 
@@ -245,7 +263,7 @@ fn upload(
     Ok(frames)
 }
 
-fn process(app: &Arc<App>, released: Released) {
+fn process(app: &Arc<App>, released: Released, take: u64) {
     let busy = app.processing();
     let Released {
         api,
@@ -253,6 +271,7 @@ fn process(app: &Arc<App>, released: Released) {
         uploader,
         keep_original,
         ticket,
+        test,
     } = released;
     let frames = match uploader.join() {
         Ok(Ok(frames)) => frames,
@@ -310,7 +329,12 @@ fn process(app: &Arc<App>, released: Released) {
     while hotkey::is_held() || app.status(|status| status.recording) {
         thread::sleep(Duration::from_millis(50));
     }
-    let (status, message) = deliver(app, &record);
+    let seconds = frames as f64 / f64::from(SAMPLE_RATE);
+    let (status, message) = if test {
+        report_test(app, &record, seconds, take)
+    } else {
+        deliver(app, &record, seconds)
+    };
     // The pill shows "Pasted" now, not after the receipt round trip.
     drop(busy);
     drop(ticket);
@@ -320,17 +344,53 @@ fn process(app: &Arc<App>, released: Released) {
     }
 }
 
+/// A test shows its transcript on the Dictation page and pastes nothing.
+fn report_test(app: &App, record: &Generation, seconds: f64, take: u64) -> (&'static str, String) {
+    let text = shown_text(record);
+    let outcome = if text.is_empty() {
+        "No speech detected"
+    } else {
+        "Test complete. Nothing was pasted."
+    };
+    app.note(outcome);
+    let dictation = Dictation {
+        text,
+        outcome: outcome.into(),
+        seconds,
+    };
+    app.set_last(dictation.clone());
+    app.set_test_result(take, dictation);
+    ("tested", outcome.into())
+}
+
+/// What the Dictation page shows for a take, as on the Mac.
+fn shown_text(record: &Generation) -> String {
+    if record.preview_text.is_empty() {
+        record.insertion_text.clone()
+    } else {
+        record.preview_text.clone()
+    }
+}
+
 /// Returns the receipt status and message, using the Swift client's statuses.
-fn deliver(app: &App, record: &Generation) -> (&'static str, String) {
+fn deliver(app: &App, record: &Generation, seconds: f64) -> (&'static str, String) {
+    let last = |outcome: &str| {
+        app.set_last(Dictation {
+            text: shown_text(record),
+            outcome: outcome.into(),
+            seconds,
+        })
+    };
     if record.insertion_text.is_empty() {
         if record.preview_text.is_empty() && record.continuation.is_none() {
             app.note("No speech detected.");
+            last("No speech detected");
             return ("none", "No speech detected".into());
         }
         app.note("Nothing new to paste.");
+        last("Nothing new to paste");
         return ("unconfirmed", "Nothing new to paste.".into());
     }
-    app.set_last_transcript(&record.insertion_text);
     log!(
         "take: pasting {} characters",
         record.insertion_text.chars().count()
@@ -338,15 +398,17 @@ fn deliver(app: &App, record: &Generation) -> (&'static str, String) {
     // The tick starts as the keystroke goes out, so it lands with the text.
     match paste::paste(&record.insertion_text, || app.set_pasted()) {
         Ok(()) => {
-            app.note("Pasted. If nothing appeared, use Copy last transcript.");
+            last("Pasted at your cursor");
+            app.note("Pasted. If nothing appeared, use Copy last message.");
             (
                 "unconfirmed",
                 "Pasted with Ctrl+V. Windows cannot confirm insertion.".into(),
             )
         }
         Err(message) => {
+            last(&message);
             app.fail(&format!(
-                "{message} Use Copy last transcript from the tray menu."
+                "{message} Use Copy last message from the tray menu."
             ));
             ("failed", message)
         }
