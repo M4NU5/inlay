@@ -104,6 +104,10 @@ impl App {
         self.update(|status| {
             status.recording = recording;
             status.capturing_since = None;
+            // A new take replaces the last one's tick.
+            if recording {
+                status.pasted_at = None;
+            }
         });
     }
 

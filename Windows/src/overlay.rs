@@ -135,13 +135,15 @@ fn stage(app: &App) -> Stage {
             status
                 .capturing_since
                 .map_or(Stage::Starting, Stage::Recording)
-        } else if status.processing > 0 {
-            Stage::Processing
         } else if status
             .pasted_at
             .is_some_and(|pasted| pasted.elapsed() < PASTED_FOR)
         {
+            // Ahead of processing: the tick starts as the paste goes out,
+            // while the take is still finishing.
             Stage::Pasted
+        } else if status.processing > 0 {
+            Stage::Processing
         } else {
             Stage::Hidden
         }

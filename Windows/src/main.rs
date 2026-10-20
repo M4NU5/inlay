@@ -105,7 +105,7 @@ fn main() -> ExitCode {
 /// It is a manual check for paste problems in a particular app.
 fn paste_command(text: &str) -> ExitCode {
     thread::sleep(Duration::from_secs(2));
-    match paste::paste(text) {
+    match paste::paste(text, || {}) {
         Ok(()) => {
             log!("--paste: sent");
             ExitCode::SUCCESS
