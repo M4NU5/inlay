@@ -327,8 +327,9 @@ pub fn delete(window: HWND) {
                         history.next = history.records.last().map(|record| record.id.clone());
                     }
                     // A load already under way may still list it: drop that
-                    // reply and load again.
-                    let reload = history.loading;
+                    // reply and load again. Load again too when nothing is
+                    // left loaded, as older records may remain past the cursor.
+                    let reload = history.loading || history.records.is_empty();
                     if reload {
                         history.request += 1;
                         history.loading = false;
