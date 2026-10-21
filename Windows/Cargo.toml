@@ -19,6 +19,7 @@ serde_json = "1"
 ureq = { version = "2.12", default-features = false, features = ["json", "native-tls"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Accessibility"] }
 
 [dependencies.windows-sys]
 version = "0.61"

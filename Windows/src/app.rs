@@ -77,8 +77,8 @@ pub struct Status {
     pub error: Option<String>,
     /// When the microphone opened for the current take. `None` while it starts.
     pub capturing_since: Option<Instant>,
-    /// When the last transcript was pasted, for the recording pill.
-    pub pasted_at: Option<Instant>,
+    /// When and how the last transcript went out, for the recording pill.
+    pub delivered: Option<(Instant, paste::Delivered)>,
 }
 
 /// Why the server can't take a dictation.
@@ -136,7 +136,7 @@ impl App {
                 last: None,
                 error: None,
                 capturing_since: None,
-                pasted_at: None,
+                delivered: None,
             }),
             events,
             wake_monitor,
@@ -205,7 +205,7 @@ impl App {
             if recording {
                 status.error = None;
                 // A new take replaces the last one's tick.
-                status.pasted_at = None;
+                status.delivered = None;
             }
         });
     }
@@ -215,8 +215,8 @@ impl App {
         self.update(|status| status.capturing_since = Some(Instant::now()));
     }
 
-    pub fn set_pasted(&self) {
-        self.update(|status| status.pasted_at = Some(Instant::now()));
+    pub fn set_delivered(&self, delivered: paste::Delivered) {
+        self.update(|status| status.delivered = Some((Instant::now(), delivered)));
     }
 
     /// Counts a take as processing until the returned guard drops.

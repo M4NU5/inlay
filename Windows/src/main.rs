@@ -101,13 +101,18 @@ fn main() -> ExitCode {
 }
 
 /// `inlay.exe --paste TEXT` waits two seconds, then pastes TEXT into the
-/// focused window with the same clipboard save, Ctrl+V and restore as a take.
+/// focused window with the same clipboard save, Ctrl+V and restore as a take,
+/// or copies it when nothing focused takes text.
 /// It is a manual check for paste problems in a particular app.
 fn paste_command(text: &str) -> ExitCode {
     thread::sleep(Duration::from_secs(2));
-    match paste::paste(text, || {}) {
-        Ok(()) => {
+    match paste::paste(text, |_| {}) {
+        Ok(paste::Delivered::Pasted) => {
             log!("--paste: sent");
+            ExitCode::SUCCESS
+        }
+        Ok(paste::Delivered::Copied) => {
+            log!("--paste: copied");
             ExitCode::SUCCESS
         }
         Err(error) => {

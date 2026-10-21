@@ -1,12 +1,15 @@
 //! The recording pill above the taskbar. A small orb breathes while the take
 //! starts, stretches into a black pill with a live waveform while recording,
 //! shrinks back to an orb with a spinner while transcribing. Once pasted the
-//! spinner closes into a green ring and a tick draws itself inside it.
+//! spinner closes into a green ring and a tick draws itself inside it. When
+//! the transcript was copied instead, the ring is amber and a clipboard with
+//! a tick draws in.
 //! Each change morphs: the shape dips, then grows into the next stage's size
 //! and colour while the old content fades out and the new fades in. It is a
 //! click-through layered window that never takes focus.
 
 use crate::app::{self, App};
+use crate::paste::Delivered;
 use crate::theme::{self, Canvas, Font, px};
 use crate::{audio, win::wide};
 use std::f32::consts::{PI, TAU};
@@ -33,19 +36,21 @@ static STREAM: Mutex<Stream> = Mutex::new(Stream {
 static MOTION: Mutex<Option<Motion>> = Mutex::new(None);
 
 const FRAME_TIMER: usize = 1;
-/// How long "Pasted" stays up.
+/// How long "Pasted" or "Copied" stays up.
 const PASTED_FOR: Duration = Duration::from_millis(1400);
 /// Seconds for one stage to morph into the next.
 const MORPH: f32 = 0.35;
 /// Starting to recording takes longer, so the orb visibly opens into the pill.
 const MORPH_INTO_RECORDING: f32 = 0.5;
-/// The spinner closing and the tick drawing in.
+/// The spinner closing and the tick or clipboard drawing in.
 const FINISH: f32 = 0.7;
 /// Seconds to grow in on appearing and shrink out on leaving.
 const FADE: f32 = 0.2;
 const PILL: u32 = 0x05080B;
 const ORB: u32 = 0x0E161D;
 const BORDER: u32 = 0x2E4556;
+/// Copied rather than pasted: the transcript is waiting on the clipboard.
+const AMBER: u32 = 0xFFB340;
 /// Bars in the waveform, one loudness sample each, as on the Mac.
 const BARS: usize = 9;
 /// Seconds between samples: a little slower than the Mac's twenty a second.
@@ -59,6 +64,7 @@ enum Stage {
     Recording(Instant),
     Processing,
     Pasted,
+    Copied,
 }
 
 /// The waveform's samples, oldest first. The last one is on its way in from
@@ -135,13 +141,15 @@ fn stage(app: &App) -> Stage {
             status
                 .capturing_since
                 .map_or(Stage::Starting, Stage::Recording)
-        } else if status
-            .pasted_at
-            .is_some_and(|pasted| pasted.elapsed() < PASTED_FOR)
+        } else if let Some((_, delivered)) =
+            status.delivered.filter(|(at, _)| at.elapsed() < PASTED_FOR)
         {
             // Ahead of processing: the tick starts as the paste goes out,
             // while the take is still finishing.
-            Stage::Pasted
+            match delivered {
+                Delivered::Pasted => Stage::Pasted,
+                Delivered::Copied => Stage::Copied,
+            }
         } else if status.processing > 0 {
             Stage::Processing
         } else {
@@ -225,7 +233,7 @@ pub fn update() {
                 };
                 motion.duration = match (motion.stage, stage) {
                     (Stage::Starting, Stage::Recording(_)) => MORPH_INTO_RECORDING,
-                    (Stage::Processing, Stage::Pasted) => FINISH,
+                    (Stage::Processing, Stage::Pasted | Stage::Copied) => FINISH,
                     _ => MORPH,
                 };
                 motion.previous = motion.stage;
@@ -307,10 +315,10 @@ fn look(stage: Stage) -> Look {
             glow: 0x30A7_D6F5,
             border,
         },
-        Stage::Pasted => Look {
+        Stage::Pasted | Stage::Copied => Look {
             width: height,
             fill: 0xFF00_0000 | ORB,
-            glow: 0x2630_D158,
+            glow: alpha(settled(stage), 0.15),
             border,
         },
         Stage::Hidden | Stage::Starting | Stage::Processing => Look {
@@ -386,7 +394,19 @@ fn frame(motion: &Motion, now: f32) -> Frame {
 }
 
 fn finishing(previous: Stage, stage: Stage) -> bool {
-    matches!((previous, stage), (Stage::Processing, Stage::Pasted))
+    matches!(
+        (previous, stage),
+        (Stage::Processing, Stage::Pasted | Stage::Copied)
+    )
+}
+
+/// The colour a finished take settles on.
+fn settled(stage: Stage) -> u32 {
+    if stage == Stage::Copied {
+        AMBER
+    } else {
+        theme::GREEN
+    }
 }
 
 /// The spinner's start angle and length in degrees.
@@ -395,25 +415,19 @@ fn spinner(now: f32) -> (f32, f32) {
     ((now * 420.0).rem_euclid(360.0), sweep)
 }
 
-/// A tick drawn `drawn` of the way along, 0 to 1, centred on `(x, y)`.
-fn tick(canvas: &Canvas, (x, y): (f32, f32), size: f32, drawn: f32, rgb: u32) {
+/// The points of `path` drawn `drawn` of the way along, 0 to 1.
+fn stroke(canvas: &Canvas, path: &[(f32, f32)], drawn: f32, rgb: u32, width: f32) {
     if drawn <= 0.0 {
         return;
     }
-    let half = size / 2.0;
-    let points = [
-        (x - half, y),
-        (x - half / 3.0, y + half * 0.65),
-        (x + half, y - half * 0.6),
-    ];
     let length = |a: (f32, f32), b: (f32, f32)| (b.0 - a.0).hypot(b.1 - a.1);
-    let total = length(points[0], points[1]) + length(points[1], points[2]);
+    let total: f32 = path.windows(2).map(|pair| length(pair[0], pair[1])).sum();
     let mut left = total * drawn.min(1.0);
-    let mut path = vec![points[0]];
-    for pair in points.windows(2) {
+    let mut shown = vec![path[0]];
+    for pair in path.windows(2) {
         let step = length(pair[0], pair[1]);
         let part = (left / step).min(1.0);
-        path.push((
+        shown.push((
             pair[0].0 + (pair[1].0 - pair[0].0) * part,
             pair[0].1 + (pair[1].1 - pair[0].1) * part,
         ));
@@ -422,12 +436,76 @@ fn tick(canvas: &Canvas, (x, y): (f32, f32), size: f32, drawn: f32, rgb: u32) {
             break;
         }
     }
-    canvas.lines(&path, rgb, 2.0 * theme::scale());
+    canvas.lines(&shown, rgb, width);
 }
 
-/// Processing turning into pasted: the spinner closes into a green ring that
-/// widens and fades back while the tick draws in.
-fn finish(canvas: &Canvas, pill: RECT, t: f32, now: f32) {
+/// A tick drawn `drawn` of the way along, 0 to 1, centred on `(x, y)`.
+fn tick(canvas: &Canvas, (x, y): (f32, f32), size: f32, drawn: f32, rgb: u32) {
+    let half = size / 2.0;
+    let points = [
+        (x - half, y),
+        (x - half / 3.0, y + half * 0.65),
+        (x + half, y - half * 0.6),
+    ];
+    stroke(canvas, &points, drawn, rgb, 2.0 * theme::scale());
+}
+
+/// A clipboard with a small tick on it, drawn `drawn` of the way along:
+/// the board, then its clip, then the tick. Centred on `(x, y)`, 10 pixels
+/// across at 100% scale.
+fn clipboard(canvas: &Canvas, (x, y): (f32, f32), drawn: f32, rgb: u32) {
+    let s = theme::scale();
+    let at = |dx: f32, dy: f32| (x + dx * s, y + dy * s);
+    // Round corners as short chamfers: at this size they read as curves.
+    let board = [
+        at(-1.8, -3.8),
+        at(-3.3, -3.8),
+        at(-4.0, -3.5),
+        at(-4.3, -2.8),
+        at(-4.3, 4.0),
+        at(-4.0, 4.7),
+        at(-3.3, 5.0),
+        at(3.3, 5.0),
+        at(4.0, 4.7),
+        at(4.3, 4.0),
+        at(4.3, -2.8),
+        at(4.0, -3.5),
+        at(3.3, -3.8),
+        at(1.8, -3.8),
+    ];
+    let clip = [
+        at(-1.8, -5.0),
+        at(1.8, -5.0),
+        at(1.8, -2.8),
+        at(-1.8, -2.8),
+        at(-1.8, -5.0),
+    ];
+    let check = [at(-2.2, 1.0), at(-0.6, 2.6), at(2.3, -0.5)];
+    let part = |from: f32, to: f32| smooth_step(((drawn - from) / (to - from)).clamp(0.0, 1.0));
+    let width = 1.7 * s;
+    stroke(canvas, &board, part(0.0, 0.5), rgb, width);
+    stroke(canvas, &clip, part(0.3, 0.6), rgb, width);
+    stroke(canvas, &check, part(0.55, 1.0), rgb, width);
+}
+
+/// A finished take's mark: the tick once pasted, the clipboard once copied.
+fn mark(canvas: &Canvas, stage: Stage, (x, y): (f32, f32), drawn: f32, rgb: u32) {
+    if stage == Stage::Copied {
+        clipboard(canvas, (x, y), drawn, rgb);
+    } else {
+        tick(
+            canvas,
+            (x, y + 0.5 * theme::scale()),
+            10.0 * theme::scale(),
+            drawn,
+            rgb,
+        );
+    }
+}
+
+/// Processing turning into pasted or copied: the spinner closes into a green
+/// or amber ring that widens and fades back while the mark draws in.
+fn finish(canvas: &Canvas, stage: Stage, pill: RECT, t: f32, now: f32) {
     let s = theme::scale();
     let centre = (
         (pill.left + pill.right) as f32 / 2.0,
@@ -445,7 +523,7 @@ fn finish(canvas: &Canvas, pill: RECT, t: f32, now: f32) {
     let (start, sweep) = spinner(now);
     let colour = mix(
         0xFF00_0000 | theme::ACCENT,
-        0xFF00_0000 | theme::GREEN,
+        0xFF00_0000 | settled(stage),
         close,
     );
     canvas.arc(
@@ -455,12 +533,12 @@ fn finish(canvas: &Canvas, pill: RECT, t: f32, now: f32) {
         alpha(colour, 1.0 - 0.8 * open),
         2.0 * s,
     );
-    tick(
+    mark(
         canvas,
-        (centre.0, centre.1 + 0.5 * s),
-        10.0 * s,
+        stage,
+        centre,
         smooth_step(((t - 0.4) / 0.5).clamp(0.0, 1.0)),
-        0xFF00_0000 | theme::GREEN,
+        0xFF00_0000 | settled(stage),
     );
 }
 
@@ -561,21 +639,21 @@ fn content(
                 2.0 * s,
             );
         }
-        Stage::Pasted => {
+        Stage::Pasted | Stage::Copied => {
             // Where `finish` comes to rest.
             canvas.arc(
                 (centre, middle),
                 10.0 * s,
                 (0.0, 360.0),
-                alpha(theme::GREEN, 0.2 * opacity),
+                alpha(settled(stage), 0.2 * opacity),
                 2.0 * s,
             );
-            tick(
+            mark(
                 canvas,
-                (centre, middle + 0.5 * s),
-                10.0 * s,
+                stage,
+                (centre, middle),
                 opacity,
-                alpha(theme::GREEN, opacity),
+                alpha(settled(stage), opacity),
             );
         }
     }
@@ -656,7 +734,7 @@ fn render(window: HWND, frame: &Frame, now: f32) {
             canvas.outline(pill, radius, frame.look.border, s);
             canvas.clip_round(pill, radius);
             if finishing(frame.previous, frame.stage) && frame.t < 1.0 {
-                finish(&canvas, pill, frame.t, now);
+                finish(&canvas, frame.stage, pill, frame.t, now);
             } else {
                 if frame.old > 0.0 {
                     content(

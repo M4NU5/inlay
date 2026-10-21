@@ -398,14 +398,21 @@ fn deliver(app: &App, record: &Generation, seconds: f64) -> (&'static str, Strin
         record.insertion_text.chars().count()
     );
     // The tick starts as the keystroke goes out, so it lands with the text.
-    match paste::paste(&record.insertion_text, || app.set_pasted()) {
-        Ok(()) => {
+    match paste::paste(&record.insertion_text, |delivered| {
+        app.set_delivered(delivered)
+    }) {
+        Ok(paste::Delivered::Pasted) => {
             last("Pasted at your cursor");
             app.note("Pasted. If nothing appeared, use Copy last message.");
             (
                 "unconfirmed",
                 "Pasted with Ctrl+V. Windows cannot confirm insertion.".into(),
             )
+        }
+        Ok(paste::Delivered::Copied) => {
+            last("Copied to clipboard");
+            app.note("No text field had focus. Copied to the clipboard.");
+            ("copied", "Copied to clipboard".into())
         }
         Err(message) => {
             last(&message);
