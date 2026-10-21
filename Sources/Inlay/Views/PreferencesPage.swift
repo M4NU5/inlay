@@ -17,14 +17,11 @@ private struct DevicePreferencesForm: View {
     @ObservedObject var controller: InlayController
     @ObservedObject var preferences: ClientPreferencesStore
     @ObservedObject var configuration: ConfigurationStore
-    @State private var endpoint = ""
-    @State private var token = ""
+    @State private var servers: [ServerDraft] = []
     @State private var deviceName = ""
     @State private var showingDiagnostics = false
     @State private var deviceToRevoke: DeviceSummary?
     @StateObject private var triggerRecorder = TriggerKeyRecorder()
-
-    private var usesPlainHTTP: Bool { (try? ServerEndpoint(endpoint))?.usesPlainHTTP ?? false }
 
     var body: some View {
         Form {
@@ -33,11 +30,10 @@ private struct DevicePreferencesForm: View {
                     LocalServerSetupSection(controller: controller)
                     Divider()
                 }
-                TextField("Server address", text: $endpoint, prompt: Text("http://localhost:8391"))
-                    .autocorrectionDisabled()
-                    .accessibilityIdentifier("preferences.endpoint")
-                SecureField("Server token", text: $token)
-                    .accessibilityIdentifier("preferences.token")
+                serverList
+                Text("Dictation uses the first ready server in this order and moves back up as soon as an earlier one is ready again.")
+                    .font(.caption)
+                    .foregroundStyle(InlayPalette.muted)
                 Text(InlayBuild.current.isDevelopment
                     ? "Paste the admin token (.local/dev-server/token) once; this Mac then keeps its own revocable credential."
                     : "Paste the server's admin token once (admin-token in its data folder, or its --token-file); this Mac then keeps its own revocable credential.")
@@ -49,19 +45,18 @@ private struct DevicePreferencesForm: View {
                     ServerConnectionStatus(controller: controller)
                     Button("Connect") {
                         controller.errorMessage = nil
-                        controller.saveConnection(endpoint: endpoint, token: token, deviceName: deviceName)
+                        controller.saveConnection(servers: servers.map { ($0.endpoint, $0.tokenToSave) }, deviceName: deviceName)
                     }
-                        .disabled(controller.isBusy || endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(controller.isBusy || servers.contains { $0.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } || deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("preferences.connect")
                 }
                 InlayActionMessage(message: preferences.errorMessage ?? controller.errorMessage)
-                if usesPlainHTTP {
-                    Text("This connection is unencrypted unless Tailscale carries it.")
-                        .font(.caption)
-                        .foregroundStyle(InlayPalette.warning)
-                }
                 VStack(alignment: .leading, spacing: 6) {
                     if controller.serverHealth != nil {
+                        if preferences.endpoints.count > 1, !controller.devices.isEmpty {
+                            Text("Devices on \(ServerFailover.displayName(controller.activeEndpoint))")
+                                .font(.caption).foregroundStyle(InlayPalette.muted)
+                        }
                         ForEach(controller.devices, id: \.id) { device in
                             HStack {
                                 Text(device.name)
@@ -222,13 +217,23 @@ private struct DevicePreferencesForm: View {
         .toggleStyle(.switch)
         .frame(maxWidth: .infinity)
         .onAppear {
-            endpoint = preferences.endpoint
-            token = preferences.token
+            loadServers()
             deviceName = preferences.deviceName
             controller.refreshPermissions()
             Task { await controller.refreshDevices() }
         }
-        .onChange(of: preferences.token) { _, newToken in token = newToken }
+        // "Use this server" can change the list while this form is open.
+        .onChange(of: preferences.endpoints) { _, _ in loadServers() }
+        // Enrollment swaps an admin token for this Mac's own credential.
+        .onChange(of: preferences.tokens) { _, tokens in
+            for index in servers.indices {
+                if let address = try? ServerEndpoint(servers[index].endpoint).address, let token = tokens[address] {
+                    servers[index].token = token
+                    servers[index].savedAddress = address
+                    servers[index].savedToken = token
+                }
+            }
+        }
         .confirmationDialog("Revoke this device?", isPresented: Binding(
             get: { deviceToRevoke != nil }, set: { if !$0 { deviceToRevoke = nil } })) {
             Button("Revoke", role: .destructive) {
@@ -239,6 +244,100 @@ private struct DevicePreferencesForm: View {
         } message: {
             Text("It will lose access to this server immediately.")
         }
+    }
+
+    @ViewBuilder private var serverList: some View {
+        ForEach($servers) { $server in
+            let index = servers.firstIndex { $0.id == server.id } ?? 0
+            let address = try? ServerEndpoint(server.endpoint).address
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("Server \(index + 1)", text: $server.endpoint, prompt: Text("http://localhost:8391"))
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("preferences.endpoint.\(index + 1)")
+                    SecureField("Token", text: $server.token)
+                        .accessibilityIdentifier("preferences.token.\(index + 1)")
+                    ServerHealthCaption(probe: address.flatMap { controller.serverProbes[$0] },
+                                        isActive: address == controller.activeEndpoint)
+                    if (try? ServerEndpoint(server.endpoint))?.usesPlainHTTP == true {
+                        Text("This connection is unencrypted unless Tailscale carries it.")
+                            .font(.caption)
+                            .foregroundStyle(InlayPalette.warning)
+                    }
+                }
+                Button { moveServer(server.id, by: -1) } label: { Image(systemName: "chevron.up") }
+                    .buttonStyle(.borderless)
+                    .disabled(index == 0)
+                    .help("Try this server earlier")
+                    .accessibilityLabel("Move server \(index + 1) up")
+                Button { moveServer(server.id, by: 1) } label: { Image(systemName: "chevron.down") }
+                    .buttonStyle(.borderless)
+                    .disabled(index == servers.count - 1)
+                    .help("Try this server later")
+                    .accessibilityLabel("Move server \(index + 1) down")
+                Button { servers.removeAll { $0.id == server.id } } label: { Image(systemName: "minus.circle") }
+                    .buttonStyle(.borderless)
+                    .disabled(servers.count == 1)
+                    .help("Remove server and its saved token when you connect")
+                    .accessibilityLabel("Remove server \(index + 1)")
+            }
+            .padding(.vertical, 6)
+        }
+        Button("Add server") { servers.append(ServerDraft(endpoint: "", token: "")) }
+            .disabled(servers.count >= ClientPreferencesStore.maximumEndpoints)
+            .accessibilityIdentifier("preferences.add-server")
+    }
+
+    private func loadServers() {
+        servers = preferences.endpoints.map { endpoint in
+            let token = preferences.token(for: endpoint)
+            return ServerDraft(endpoint: endpoint, token: token, savedAddress: endpoint, savedToken: token)
+        }
+    }
+
+    private func moveServer(_ id: UUID, by offset: Int) {
+        guard let index = servers.firstIndex(where: { $0.id == id }),
+              servers.indices.contains(index + offset) else { return }
+        servers.swapAt(index, index + offset)
+    }
+}
+
+private struct ServerDraft: Identifiable {
+    let id = UUID()
+    var endpoint: String
+    var token: String
+    /// The saved address this row's token was read for; empty for a new row.
+    var savedAddress = ""
+    var savedToken = ""
+
+    /// A saved credential is never sent to an address typed over its row.
+    var tokenToSave: String {
+        let address = (try? ServerEndpoint(endpoint).address) ?? endpoint
+        return token == savedToken && address != savedAddress ? "" : token
+    }
+}
+
+/// The last health check for one listed server; unsaved rows have none yet.
+private struct ServerHealthCaption: View {
+    let probe: ServerProbe?
+    let isActive: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let probe {
+                StatusDot(isReady: probe.isReady)
+                Text((isActive ? "In use · " : "") + (probe.problem ?? "Ready"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(probe.problem ?? "Ready")
+                Spacer(minLength: 8)
+                Text("Checked \(probe.checkedAt.formatted(date: .omitted, time: .standard))")
+            } else {
+                Text("Checked after you connect")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(InlayPalette.muted)
     }
 }
 
@@ -393,6 +492,11 @@ struct ServerPreferencesPage: View {
             loadLatest()
             controller.refreshServer()
             Task { await controller.refreshStorageUsage() }
+        }
+        // A draft belongs to the server it was loaded from; never save it to another.
+        .onChange(of: controller.activeEndpoint) { _, _ in
+            base = nil
+            loadLatest()
         }
         .onChange(of: controller.sharedPreferences) { old, latest in
             if base == nil || !dirty || latest?.preferences == draft {
