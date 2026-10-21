@@ -82,7 +82,9 @@ struct InlayWindowView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(InlayPalette.canvas)
+            // Shape-style backgrounds ignore the safe area by default; keep the
+            // canvas below the titlebar so the window glass shows behind the strip.
+            .background(InlayPalette.canvas, ignoresSafeAreaEdges: [])
             .overlay(alignment: .top) {
                 GeometryReader { geometry in
                     InlayTitlebarGlassStrip(topInset: geometry.safeAreaInsets.top)
