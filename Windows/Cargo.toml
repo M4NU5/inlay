@@ -20,7 +20,8 @@ ureq = { version = "2.12", default-features = false, features = ["json", "native
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 
-# The same version cpal uses, for the COM audio interfaces windows-sys lacks.
+# The same version cpal uses, for the COM audio and UI Automation interfaces
+# windows-sys lacks.
 [dependencies.windows]
 version = "0.62"
 features = [
@@ -28,6 +29,7 @@ features = [
     "Win32_Media_Audio_Endpoints",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_UI_Accessibility",
 ]
 
 [dependencies.windows-sys]

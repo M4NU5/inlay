@@ -2,12 +2,21 @@
 //! in consoles), then put the previous clipboard back. Windows gives no signal
 //! that the text landed, so nothing here claims it did. Windows also blocks
 //! input into elevated (administrator) windows from this unelevated app.
+//! When nothing focused takes text, the transcript is copied and left on the
+//! clipboard instead.
 
 use crate::hotkey::{self, INJECTED_MARKER};
 use crate::win::{from_wide, wide};
 use std::ptr::{null, null_mut};
 use std::thread;
 use std::time::Duration;
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+};
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation8, IUIAutomation2, IUIAutomationValuePattern, UIA_EditControlTypeId,
+    UIA_PaneControlTypeId, UIA_ValuePatternId,
+};
 use windows_sys::Win32::Foundation::{GlobalFree, HWND};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
@@ -28,7 +37,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetClassNameW, GetForegroundWindow, HWND_MESSAGE,
+    CreateWindowExW, DestroyWindow, GUITHREADINFO, GetClassNameW, GetForegroundWindow,
+    GetGUIThreadInfo, GetWindowThreadProcessId, HWND_MESSAGE,
 };
 
 /// Console hosts paste with Ctrl+Shift+V; Ctrl+V can reach the shell as ^V.
@@ -41,17 +51,36 @@ const VK_V: VIRTUAL_KEY = 0x56;
 /// An unassigned key code. Pressing it before releasing Alt or Win stops that
 /// release from opening the menu bar or the Start menu.
 const VK_MASK: VIRTUAL_KEY = 0xE8;
+/// How long UI Automation may wait on the focused app before giving up.
+const FOCUS_TIMEOUT_MS: u32 = 500;
+/// Chromium builds its accessibility tree only once asked, so a browser or
+/// Electron app first reports a bare pane. Ask again before deciding.
+const FOCUS_ATTEMPTS: u32 = 8;
+const FOCUS_RETRY: Duration = Duration::from_millis(100);
 
-/// Calls `sent` once the paste keystroke has gone out, before the clipboard
-/// is restored.
-pub fn paste(text: &str, sent: impl FnOnce()) -> Result<(), String> {
+/// What happened to a transcript.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Delivered {
+    /// Ctrl+V went to a text field, and the previous clipboard came back.
+    Pasted,
+    /// Nothing focused takes text, so the transcript stays on the clipboard.
+    Copied,
+}
+
+/// Calls `sent` once the transcript has gone out: after the paste keystroke
+/// and before the clipboard is restored, or once it is copied.
+pub fn paste(text: &str, sent: impl FnOnce(Delivered)) -> Result<Delivered, String> {
     let saved = snapshot()?;
     write_text(text, true)?;
     let staged = unsafe { GetClipboardSequenceNumber() };
+    // Checked after the clipboard work, which can wait on other apps. The
+    // check itself can take a moment, so the window must still be in front.
     let target = unsafe { GetForegroundWindow() };
-    if target.is_null() {
-        restore(&saved, staged);
-        return Err("No window has keyboard focus.".into());
+    if !accepts_text(target) || unsafe { GetForegroundWindow() } != target {
+        copy(text)?;
+        log!("paste: no text field has focus, so the transcript was copied");
+        sent(Delivered::Copied);
+        return Ok(Delivered::Copied);
     }
     let terminal = is_terminal(target);
     release_modifiers();
@@ -63,10 +92,10 @@ pub fn paste(text: &str, sent: impl FnOnce()) -> Result<(), String> {
         "paste: sent {} to the foreground window",
         if terminal { "Ctrl+Shift+V" } else { "Ctrl+V" }
     );
-    sent();
+    sent(Delivered::Pasted);
     thread::sleep(RESTORE_DELAY);
     restore(&saved, staged);
-    Ok(())
+    Ok(Delivered::Pasted)
 }
 
 /// Leaves `text` on the clipboard, where clipboard history may keep it.
@@ -250,6 +279,63 @@ fn restore(saved: &[(u32, Vec<u8>)], staged: u32) {
     for (format, bytes) in saved {
         let _ = set(*format, bytes);
     }
+}
+
+/// Whether the focused control takes typed text: a console, a control showing
+/// a caret, or one UI Automation calls editable. Anything else, such as the
+/// desktop or a game, gets the transcript on the clipboard instead.
+fn accepts_text(window: HWND) -> bool {
+    !window.is_null() && (is_terminal(window) || has_caret(window) || editable_focus())
+}
+
+fn has_caret(window: HWND) -> bool {
+    let mut info = GUITHREADINFO {
+        cbSize: size_of::<GUITHREADINFO>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    unsafe {
+        let thread = GetWindowThreadProcessId(window, null_mut());
+        GetGUIThreadInfo(thread, &mut info) != 0 && !info.hwndCaret.is_null()
+    }
+}
+
+/// Browsers and Electron apps draw their own fields, so ask UI Automation.
+/// A field with a value must be writable; one without must be an edit box.
+fn editable_focus() -> bool {
+    let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+    let editable = || -> windows::core::Result<bool> {
+        unsafe {
+            // Only the Windows 8 class takes timeouts, so a hung app can't
+            // hold up the paste.
+            let automation: IUIAutomation2 =
+                CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)?;
+            automation.SetConnectionTimeout(FOCUS_TIMEOUT_MS)?;
+            automation.SetTransactionTimeout(FOCUS_TIMEOUT_MS)?;
+            let mut attempt = 1;
+            loop {
+                let element = automation.GetFocusedElement()?;
+                if !element.CurrentIsEnabled()?.as_bool() {
+                    return Ok(false);
+                }
+                if let Ok(value) =
+                    element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                {
+                    return Ok(!value.CurrentIsReadOnly()?.as_bool());
+                }
+                let control = element.CurrentControlType()?;
+                if control != UIA_PaneControlTypeId || attempt == FOCUS_ATTEMPTS {
+                    return Ok(control == UIA_EditControlTypeId);
+                }
+                attempt += 1;
+                thread::sleep(FOCUS_RETRY);
+            }
+        }
+    };
+    let editable = editable().unwrap_or(false);
+    if initialized {
+        unsafe { CoUninitialize() };
+    }
+    editable
 }
 
 fn is_terminal(window: HWND) -> bool {
