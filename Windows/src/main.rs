@@ -13,6 +13,7 @@ mod credentials;
 mod hotkey;
 mod icons;
 mod menu;
+mod mute;
 mod overlay;
 mod paste;
 mod settings;
@@ -65,6 +66,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     log!("Inlay for Windows {} starting", env!("CARGO_PKG_VERSION"));
+    mute::restore_persisted();
 
     let first_run = !directory.join("config.json").exists();
     let config = Config::load();

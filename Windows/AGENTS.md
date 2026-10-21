@@ -53,6 +53,7 @@ The machine running these checks usually belongs to someone who is using it.
 | `take.rs`                                   | One take: admission, capture, acknowledged uploads, finish, events, ordered paste.                      |
 | `api.rs`                                    | HTTP client for the v1 API, including NDJSON events and recovery.                                       |
 | `audio.rs`                                  | WASAPI capture through cpal, downmix and windowed-sinc resampling to 16 kHz.                            |
+| `mute.rs`                                   | Mutes the speakers while recording, with a crash record so a killed run can't leave them muted.         |
 | `hotkey.rs`                                 | `WH_KEYBOARD_LL` hook and the hold key list.                                                            |
 | `paste.rs`                                  | Clipboard snapshot and restore, modifier release, Ctrl+V or Ctrl+Shift+V.                               |
 | `app.rs`                                    | Shared state, server health monitor, paste ordering.                                                    |
