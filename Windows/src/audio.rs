@@ -54,6 +54,11 @@ pub struct Recording {
 }
 
 impl Recording {
+    /// How many 16 kHz frames have been handed on so far.
+    pub fn frames(&self) -> u64 {
+        self.frames.load(Ordering::SeqCst)
+    }
+
     /// Stops the microphone and returns how many 16 kHz frames were handed on.
     pub fn stop(self) -> u64 {
         drop(self.stream);

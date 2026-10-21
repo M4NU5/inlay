@@ -60,6 +60,8 @@ pub struct Dictation {
 pub struct Status {
     pub server: Server,
     pub recording: bool,
+    /// The take number that set `recording`. Only it may clear it.
+    pub recording_take: u64,
     /// The current recording is a microphone test, which never pastes.
     pub testing: bool,
     pub processing: usize,
@@ -126,6 +128,7 @@ impl App {
             status: Mutex::new(Status {
                 server: Server::Checking,
                 recording: false,
+                recording_take: 0,
                 testing: false,
                 processing: 0,
                 tests: 0,
@@ -197,8 +200,14 @@ impl App {
         tray::refresh();
     }
 
-    pub fn set_recording(&self, recording: bool, test: bool) {
+    /// A take that ends after a newer one started leaves the newer one's
+    /// status alone.
+    pub fn set_recording(&self, take: u64, recording: bool, test: bool) {
         self.update(|status| {
+            if !recording && status.recording_take != take {
+                return;
+            }
+            status.recording_take = take;
             status.recording = recording;
             status.testing = recording && test;
             status.capturing_since = None;
@@ -211,8 +220,12 @@ impl App {
     }
 
     /// The microphone is open: the take has moved from starting to recording.
-    pub fn set_capturing(&self) {
-        self.update(|status| status.capturing_since = Some(Instant::now()));
+    pub fn set_capturing(&self, take: u64) {
+        self.update(|status| {
+            if status.recording && status.recording_take == take {
+                status.capturing_since = Some(Instant::now());
+            }
+        });
     }
 
     pub fn set_pasted(&self) {
