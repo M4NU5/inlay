@@ -249,7 +249,18 @@ pub fn update() {
     render(window, &frame, now);
     if appearing {
         unsafe {
-            ShowWindow(window, SW_SHOWNOACTIVATE);
+            // A hidden window keeps its place in the stacking order, and a
+            // long-running pill has been seen behind ordinary windows while
+            // still marked topmost. Raise it to the top each time it shows.
+            SetWindowPos(
+                window,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
             SetTimer(window, FRAME_TIMER, 16, None);
         }
     }
