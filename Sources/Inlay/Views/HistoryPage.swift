@@ -417,7 +417,7 @@ private struct WisprFlowImportSheet: View {
 
             Divider()
             HStack {
-                Text("Destination: \(controller.activeEndpoint)")
+                Text("Destination: \(controller.wisprImport.wisprFlowDestinationEndpoint ?? controller.activeEndpoint)")
                     .font(.caption)
                     .foregroundStyle(InlayPalette.muted)
                     .lineLimit(1)

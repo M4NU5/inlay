@@ -45,7 +45,7 @@ private struct DevicePreferencesForm: View {
                     ServerConnectionStatus(controller: controller)
                     Button("Connect") {
                         controller.errorMessage = nil
-                        controller.saveConnection(servers: servers.map { ($0.endpoint, $0.token) }, deviceName: deviceName)
+                        controller.saveConnection(servers: servers.map { ($0.endpoint, $0.tokenToSave) }, deviceName: deviceName)
                     }
                         .disabled(controller.isBusy || servers.contains { $0.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } || deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("preferences.connect")
@@ -217,16 +217,20 @@ private struct DevicePreferencesForm: View {
         .toggleStyle(.switch)
         .frame(maxWidth: .infinity)
         .onAppear {
-            servers = preferences.endpoints.map { ServerDraft(endpoint: $0, token: preferences.token(for: $0)) }
+            loadServers()
             deviceName = preferences.deviceName
             controller.refreshPermissions()
             Task { await controller.refreshDevices() }
         }
+        // "Use this server" can change the list while this form is open.
+        .onChange(of: preferences.endpoints) { _, _ in loadServers() }
         // Enrollment swaps an admin token for this Mac's own credential.
         .onChange(of: preferences.tokens) { _, tokens in
             for index in servers.indices {
                 if let address = try? ServerEndpoint(servers[index].endpoint).address, let token = tokens[address] {
                     servers[index].token = token
+                    servers[index].savedAddress = address
+                    servers[index].savedToken = token
                 }
             }
         }
@@ -284,6 +288,13 @@ private struct DevicePreferencesForm: View {
             .accessibilityIdentifier("preferences.add-server")
     }
 
+    private func loadServers() {
+        servers = preferences.endpoints.map { endpoint in
+            let token = preferences.token(for: endpoint)
+            return ServerDraft(endpoint: endpoint, token: token, savedAddress: endpoint, savedToken: token)
+        }
+    }
+
     private func moveServer(_ id: UUID, by offset: Int) {
         guard let index = servers.firstIndex(where: { $0.id == id }),
               servers.indices.contains(index + offset) else { return }
@@ -295,6 +306,15 @@ private struct ServerDraft: Identifiable {
     let id = UUID()
     var endpoint: String
     var token: String
+    /// The saved address this row's token was read for; empty for a new row.
+    var savedAddress = ""
+    var savedToken = ""
+
+    /// A saved credential is never sent to an address typed over its row.
+    var tokenToSave: String {
+        let address = (try? ServerEndpoint(endpoint).address) ?? endpoint
+        return token == savedToken && address != savedAddress ? "" : token
+    }
 }
 
 /// The last health check for one listed server; unsaved rows have none yet.
@@ -472,6 +492,11 @@ struct ServerPreferencesPage: View {
             loadLatest()
             controller.refreshServer()
             Task { await controller.refreshStorageUsage() }
+        }
+        // A draft belongs to the server it was loaded from; never save it to another.
+        .onChange(of: controller.activeEndpoint) { _, _ in
+            base = nil
+            loadLatest()
         }
         .onChange(of: controller.sharedPreferences) { old, latest in
             if base == nil || !dirty || latest?.preferences == draft {
