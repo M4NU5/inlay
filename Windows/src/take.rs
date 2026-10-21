@@ -9,7 +9,7 @@ use crate::audio::{self, SAMPLE_RATE, Stop};
 use crate::controller::Event;
 use crate::{hotkey, mute, paste};
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -19,6 +19,10 @@ const MIN_FRAMES: u64 = SAMPLE_RATE as u64 / 4;
 const CHUNK_BYTES: usize = 32_000;
 /// Roughly five seconds of microphone callbacks may wait for the network.
 const BACKLOG_CHUNKS: usize = 512;
+/// A microphone that delivers no audio for this long has stopped.
+const STALL: Duration = Duration::from_secs(3);
+/// A Bluetooth headset can take several seconds to deliver its first audio.
+const STARTUP: Duration = Duration::from_secs(10);
 
 enum Signal {
     Release,
@@ -57,13 +61,15 @@ impl Handle {
 pub fn start(id: u64, app: Arc<App>, test: bool) -> Handle {
     let (signals, inbox) = mpsc::channel();
     let own = signals.clone();
+    // Set here, not on the take's thread, so takes claim the status in order.
+    let test_take = test.then(|| app.test_take(id));
+    app.set_recording(id, true, test);
     let thread = thread::Builder::new()
         .name(format!("take-{id}"))
         .spawn(move || {
-            let _test = test.then(|| app.test_take(id));
-            app.set_recording(true, test);
-            let released = record(&app, &inbox, &own, test);
-            app.set_recording(false, test);
+            let _test = test_take;
+            let released = record(&app, &inbox, &own, id, test);
+            app.set_recording(id, false, test);
             let _ = app.events.send(Event::TakeEnded(id));
             if let Some(released) = released {
                 process(&app, released, id);
@@ -91,6 +97,7 @@ fn record(
     app: &Arc<App>,
     inbox: &Receiver<Signal>,
     own: &Sender<Signal>,
+    id: u64,
     test: bool,
 ) -> Option<Released> {
     // Admission comes before the microphone: an unavailable server means no recording.
@@ -173,11 +180,9 @@ fn record(
     };
     log!("take: recording from {}", recording.device);
     let muted = settings.config.mute_output_while_recording.then(mute::mute);
-    app.set_capturing();
+    app.set_capturing(id);
 
-    let signal = inbox
-        .recv()
-        .unwrap_or(Signal::Cancel("Recording stopped.".into()));
+    let signal = wait(inbox, &recording);
     let frames = recording.stop();
     drop(muted);
     match signal {
@@ -208,6 +213,28 @@ fn record(
         ticket: app.deliveries.issue(),
         test,
     })
+}
+
+/// Waits for the take to end. An unplugged microphone can stop delivering
+/// audio without reporting an error, so a stalled stream ends the take too.
+fn wait(inbox: &Receiver<Signal>, recording: &audio::Recording) -> Signal {
+    let opened = Instant::now();
+    let mut frames = 0;
+    loop {
+        match inbox.recv_timeout(STALL) {
+            Ok(signal) => return signal,
+            Err(RecvTimeoutError::Disconnected) => {
+                return Signal::Cancel("Recording stopped.".into());
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                let now = recording.frames();
+                if now == frames && (now > 0 || opened.elapsed() >= STARTUP) {
+                    return Signal::Failed("The microphone stopped sending audio.".into());
+                }
+                frames = now;
+            }
+        }
+    }
 }
 
 fn too_short(test: bool) -> &'static str {
