@@ -39,33 +39,90 @@ enum InlayPalette {
     }
 }
 
-/// Only the sidebar looks through the window; reading and editing surfaces stay
-/// solid. Use AppKit's behind-window material rather than blurring app content.
+/// The window's one glass layer: behind-window material tinted with the
+/// palette, painted edge-to-edge under a transparent titlebar. The sidebar
+/// and titlebar look through it; reading and editing surfaces stay solid.
+/// Every page sees the same bar because no page paints the top strip itself.
+struct InlayWindowGlassSurface: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        if reduceTransparency || contrast == .increased {
+            InlayPalette.canvas
+        } else {
+            InlayBehindWindowMaterial()
+                .overlay(InlayPalette.glassTint.opacity(colorScheme == .dark ? 0.58 : 0.5))
+                .overlay {
+                    LinearGradient(colors: [.white.opacity(colorScheme == .dark ? 0.07 : 0.35), .clear],
+                                   startPoint: .top, endPoint: .center)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+/// A blue tint over the window glass, deepening the sidebar column (and its
+/// slice of the titlebar) without a second material seam.
 struct InlaySidebarSurface: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        if colorScheme == .dark && !reduceTransparency && contrast != .increased {
-            InlaySidebarMaterial()
-                .overlay(InlayPalette.sidebar.opacity(0.54))
+        if reduceTransparency || contrast == .increased {
+            InlayPalette.sidebar
+        } else {
+            InlayPalette.sidebar.opacity(colorScheme == .dark ? 0.34 : 0.62)
                 .overlay {
                     LinearGradient(colors: [.white.opacity(0.05), .clear],
                                    startPoint: .topLeading, endPoint: .bottomTrailing)
                 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
-        } else {
-            InlayPalette.sidebar
         }
     }
 }
 
-private struct InlaySidebarMaterial: NSViewRepresentable {
+/// Glass strip above detail content, exactly filling the titlebar area.
+/// Pages whose scroll view reaches the top edge scroll *under* it and are
+/// blurred by the material, like a native toolbar; other pages simply show
+/// the same tinted glass. Height comes from the safe-area inset, so it
+/// matches the system titlebar on every OS version and window state.
+struct InlayTitlebarGlassStrip: View {
+    var topInset: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                if reduceTransparency || contrast == .increased {
+                    InlayPalette.canvas
+                } else {
+                    Rectangle().fill(.ultraThinMaterial)
+                    InlayPalette.glassTint.opacity(colorScheme == .dark ? 0.52 : 0.45)
+                    LinearGradient(colors: [.white.opacity(colorScheme == .dark ? 0.07 : 0.3), .clear],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+            }
+            .frame(height: topInset)
+            Rectangle()
+                .fill(InlayPalette.line.opacity(contrast == .increased ? 1 : 0.55))
+                .frame(height: 0.5)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct InlayBehindWindowMaterial: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
-        view.material = .sidebar
+        view.material = .underWindowBackground
         view.blendingMode = .behindWindow
         view.state = .followsWindowActiveState
         return view

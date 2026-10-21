@@ -116,11 +116,14 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false
             )
             window.title = InlayBuild.current.displayName
-            // Let native chrome obscure scrolling form content under the title.
-            window.titlebarAppearsTransparent = false
+            // The root view paints one glass surface under a transparent
+            // titlebar. An opaque titlebar lets AppKit derive its color from
+            // whichever page happens to sit at the top edge, so the bar
+            // changed color between tabs.
+            window.titlebarAppearsTransparent = true
             window.titleVisibility = .visible
             window.toolbarStyle = .unified
-            window.titlebarSeparatorStyle = .automatic
+            window.titlebarSeparatorStyle = .none
             window.backgroundColor = NSColor(InlayPalette.canvas)
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 820, height: 620)

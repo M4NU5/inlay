@@ -68,7 +68,7 @@ struct InlayWindowView: View {
                 ServerConnectionStatus(controller: controller, compact: true)
                     .padding(18)
             }
-            .background { InlaySidebarSurface() }
+            .background { InlaySidebarSurface().ignoresSafeArea() }
             .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 260)
         } detail: {
             Group {
@@ -83,8 +83,16 @@ struct InlayWindowView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(InlayPalette.canvas)
+            .overlay(alignment: .top) {
+                GeometryReader { geometry in
+                    InlayTitlebarGlassStrip(topInset: geometry.safeAreaInsets.top)
+                        .offset(y: -geometry.safeAreaInsets.top)
+                }
+                .allowsHitTesting(false)
+            }
             .navigationTitle("\(InlayBuild.current.displayName) · \(page.rawValue)")
         }
+        .background { InlayWindowGlassSurface().ignoresSafeArea() }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 820, minHeight: 580)
         .tint(InlayPalette.accent)
@@ -285,7 +293,9 @@ struct InlayPageScaffold<Content: View>: View {
 
     var body: some View {
         ZStack {
-            InlayPalette.canvas.ignoresSafeArea()
+            // Never paint into the titlebar strip: the window glass owns it,
+            // identically on every page.
+            InlayPalette.canvas
             VStack(alignment: .leading, spacing: 0) {
                 InlayPageHeading(title: title)
                     .frame(maxWidth: InlayPageMetrics.contentWidth, alignment: .leading)
