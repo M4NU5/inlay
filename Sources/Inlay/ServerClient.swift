@@ -48,6 +48,8 @@ struct ServerClient: Sendable {
     private static let defaultSession = makeSession(requestTimeout: 12, resourceTimeout: 300)
     /// Failover health checks give up quickly so a dead server never holds up the others.
     static let probeSession = makeSession(requestTimeout: 2, resourceTimeout: 2)
+    /// Starting a take while another server is ready, so a silent server fails over fast.
+    static let admissionSession = makeSession(requestTimeout: 3, resourceTimeout: 3)
 
     private static func makeSession(requestTimeout: TimeInterval, resourceTimeout: TimeInterval) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral

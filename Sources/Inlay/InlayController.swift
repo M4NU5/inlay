@@ -22,7 +22,7 @@ enum InsertionMode {
 final class InlayController: ObservableObject {
     @Published var activity: DictationActivity = .idle {
         // A server switch waits for capture to end, then applies at once.
-        didSet { if oldValue.isCapturing, !activity.isCapturing, applyProbes() { refreshServerData() } }
+        didSet { if oldValue.isCapturing, !activity.isCapturing { applyProbes() } }
     }
     let recordingFeedback = RecordingFeedback()
     @Published var recordingListHint: String?
@@ -297,9 +297,10 @@ final class InlayController: ObservableObject {
         applyingConfiguration = false
     }
 
-    private func client(for endpoint: String? = nil) throws -> ServerClient {
+    private func client(for endpoint: String? = nil, session: URLSession? = nil) throws -> ServerClient {
         let endpoint = endpoint ?? activeEndpoint
-        return try serverClientFactory?() ?? ServerClient(endpoint: endpoint, token: preferences.token(for: endpoint))
+        return try serverClientFactory?()
+            ?? ServerClient(endpoint: endpoint, token: preferences.token(for: endpoint), session: session)
     }
 
     func refreshServer() {
@@ -335,7 +336,7 @@ final class InlayController: ObservableObject {
             }
             if enrolled { queuedCheck = true; return }
         }
-        if applyProbes() || refreshData { refreshServerData() }
+        if !applyProbes(), refreshData { refreshServerData() }
         Task { [weak self] in await self?.reconcilePendingGenerations() }
     }
 
@@ -358,7 +359,8 @@ final class InlayController: ObservableObject {
     }
 
     /// Moves to the first ready server unless a take is capturing, then
-    /// updates status. Returns true when the active server changed.
+    /// updates status. Every switch happens here and reloads the new server's
+    /// data. Returns true when the active server changed.
     @discardableResult
     private func applyProbes() -> Bool {
         let endpoints = preferences.endpoints
@@ -369,6 +371,7 @@ final class InlayController: ObservableObject {
         if switched {
             activeEndpoint = target
             resetServerData()
+            refreshServerData()
         }
         let probe = serverProbes[activeEndpoint]
         serverHealth = probe?.health
@@ -598,9 +601,12 @@ final class InlayController: ObservableObject {
     func completeLocalSetup() -> Bool {
         guard !isBusy, let token = localServer.adminToken() else { return false }
         let local = ClientPreferencesStore.defaultEndpoint
-        // The local server goes first; other servers stay as fallbacks.
-        let others = preferences.endpoints.filter { $0 != local }.map { ($0, preferences.token(for: $0)) }
-        saveConnection(servers: [(local, token)] + others, deviceName: preferences.deviceName)
+        // This Mac's server is the fallback: it keeps its place, or goes last.
+        var servers = preferences.endpoints.map { endpoint in
+            (endpoint: endpoint, token: endpoint == local ? token : preferences.token(for: endpoint))
+        }
+        if !preferences.endpoints.contains(local) { servers.append((endpoint: local, token: token)) }
+        saveConnection(servers: servers, deviceName: preferences.deviceName)
         guard preferences.token(for: local) == token else { return false }
         refreshServer()
         return true
@@ -958,8 +964,16 @@ final class InlayController: ObservableObject {
                     device: .init(id: preferences.deviceID, name: preferences.deviceName), mode: isTest ? .test : .dictation)
                 var connection = try client()
                 let created: GenerationRecord
-                do { created = try await connection.create(request) }
-                catch {
+                do {
+                    // With another server ready, one that stopped answering must not hold the key for 12s.
+                    let probes = serverProbes
+                    let hasFallback = preferences.endpoints.contains {
+                        $0 != connection.address && probes[$0]?.isReady == true
+                    }
+                    let admission = hasFallback
+                        ? try client(for: connection.address, session: ServerClient.admissionSession) : connection
+                    created = try await admission.create(request)
+                } catch {
                     // Admission precedes the microphone, so one retry on the next
                     // ready server loses nothing. The switch itself waits for the take to end.
                     guard ServerProbe.isUnavailable(error), sessionID == current, !Task.isCancelled else { throw error }
@@ -967,7 +981,12 @@ final class InlayController: ObservableObject {
                     applyProbes()
                     guard let next = ServerFailover.preferred(preferences.endpoints, probes: serverProbes) else { throw error }
                     connection = try client(for: next)
-                    created = try await connection.create(request)
+                    do { created = try await connection.create(request) }
+                    catch {
+                        // Mark it down too, so the next take does not pick it from a stale probe.
+                        if ServerProbe.isUnavailable(error) { serverProbes[next] = ServerProbe(error: error) }
+                        throw error
+                    }
                 }
                 guard sessionID == current, activity == .starting, !Task.isCancelled else {
                     Task { try? await connection.cancel(created.id) }; return
@@ -975,7 +994,8 @@ final class InlayController: ObservableObject {
                 guard created.status == .receiving else { throw ServerClientError.invalidResponse }
                 activeGenerationID = created.id
                 activeClient = connection
-                sharedPreferences = created.settings
+                // A retried take's settings belong to its fallback, not the server the pages show.
+                if connection.address == activeEndpoint { sharedPreferences = created.settings }
                 // A backlog stops capture; the upload seals what reached the server.
                 let pipe = AudioChunkPipe { [weak self] error in
                     Task { @MainActor [weak self] in
