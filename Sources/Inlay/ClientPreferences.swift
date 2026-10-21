@@ -12,7 +12,8 @@ final class ClientPreferencesStore: ObservableObject {
     static let maximumEndpoints = 5
     private struct Settings: Codable {
         var endpoints: [String]?
-        /// Single-server files from before failover; read once, then rewritten as `endpoints`.
+        /// Read only from single-server files made before failover. Still written, as the
+        /// first server, so an older build can read the file.
         var endpoint: String?
         var deviceID: String
         var deviceName: String
@@ -27,6 +28,9 @@ final class ClientPreferencesStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     private let url: URL
     private let credentialAccount: String
+    /// The list client.json keeps. An INLAY_SERVER_URL run edits `endpoints` only.
+    private var savedEndpoints: [String]
+    private let isOverridden: Bool
 
     init(root: URL, environment: [String: String] = ProcessInfo.processInfo.environment,
          readCredential: ((String) -> String)? = nil) {
@@ -34,15 +38,18 @@ final class ClientPreferencesStore: ObservableObject {
         credentialAccount = root.standardizedFileURL.path
         let saved = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(Settings.self, from: $0) }
         let savedEndpoints = Self.normalized(saved?.endpoints ?? saved?.endpoint.map { [$0] } ?? [])
-        let resolved = environment["INLAY_SERVER_URL"].map { Self.normalized([$0]) }
-            ?? (savedEndpoints.isEmpty ? [Self.defaultEndpoint] : savedEndpoints)
+        let override = environment["INLAY_SERVER_URL"].map { Self.normalized([$0]) }
+        let saveable = savedEndpoints.isEmpty ? [Self.defaultEndpoint] : savedEndpoints
+        let resolved = override ?? saveable
         endpoints = resolved
+        self.savedEndpoints = saveable
+        isOverridden = override != nil
         deviceID = saved?.deviceID ?? UUID().uuidString.lowercased()
         deviceName = saved?.deviceName ?? Host.current().localizedName ?? "My Mac"
         tokens = [:]
-        if saved == nil, resolved.allSatisfy({ (try? ServerEndpoint($0)) != nil }) { persist() }
-        // Rewrite the saved list, never an INLAY_SERVER_URL override for this run.
-        else if saved?.endpoints == nil, !savedEndpoints.isEmpty { persist(savedEndpoints) }
+        // persist() writes the saved list, never an INLAY_SERVER_URL override for this run.
+        if saved == nil, saveable.allSatisfy({ (try? ServerEndpoint($0)) != nil }) { persist() }
+        else if saved?.endpoints == nil, !savedEndpoints.isEmpty { persist() }
         for endpoint in resolved {
             do {
                 _ = try ServerEndpoint(endpoint)
@@ -106,16 +113,18 @@ final class ClientPreferencesStore: ObservableObject {
                 return false
             }
         }
-        let previous = (self.endpoints, self.deviceName, self.tokens)
+        let previous = (self.endpoints, self.deviceName, self.tokens, self.savedEndpoints)
         self.endpoints = validated.map(\.endpoint)
         self.deviceName = name
         self.tokens = Dictionary(uniqueKeysWithValues: validated.map { ($0.endpoint, $0.token) })
+        if !isOverridden { savedEndpoints = self.endpoints }
         guard persist() else {
-            (self.endpoints, self.deviceName, self.tokens) = previous
+            (self.endpoints, self.deviceName, self.tokens, self.savedEndpoints) = previous
             return false
         }
         // Only after the list stops naming a server, so a failed write keeps its credential.
-        for removed in previous.0 where !self.endpoints.contains(removed) {
+        // Servers client.json still lists keep theirs during an override run.
+        for removed in previous.0 where !self.endpoints.contains(removed) && !savedEndpoints.contains(removed) {
             if let address = try? ServerEndpoint(removed).address {
                 Self.writeToken("", account: credentialAccount + "|" + address)
             }
@@ -136,14 +145,15 @@ final class ClientPreferencesStore: ObservableObject {
     }
 
     @discardableResult
-    private func persist(_ savedEndpoints: [String]? = nil) -> Bool {
+    private func persist() -> Bool {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(Settings(endpoints: savedEndpoints ?? endpoints, deviceID: deviceID,
-                                                   deviceName: deviceName))
+            // `endpoint` lets an older build roll back without losing this Mac's identity.
+            let data = try encoder.encode(Settings(endpoints: savedEndpoints, endpoint: savedEndpoints.first,
+                                                   deviceID: deviceID, deviceName: deviceName))
             try data.write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             errorMessage = nil
