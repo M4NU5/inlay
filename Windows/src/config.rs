@@ -21,6 +21,8 @@ pub struct Config {
     pub microphone: Option<String>,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    #[serde(default)]
+    pub mute_output_while_recording: bool,
 }
 
 fn default_hotkey() -> String {
@@ -47,6 +49,7 @@ impl Config {
             device_name: env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows PC".into()),
             microphone: None,
             hotkey: default_hotkey(),
+            mute_output_while_recording: false,
         };
         match fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {

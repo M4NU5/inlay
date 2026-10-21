@@ -1,7 +1,7 @@
 //! The This PC page: the server connection, this PC's settings, and the version.
 
 use super::layout::{Builder, Control, Row};
-use super::{CONNECT, Context, ENDPOINT, HOTKEY, LAUNCH, NAME, TOKEN, server_line};
+use super::{CONNECT, Context, ENDPOINT, HOTKEY, LAUNCH, MUTE, NAME, TOKEN, server_line};
 use crate::app::Server;
 use crate::{config, hotkey, theme};
 
@@ -40,6 +40,12 @@ pub fn build(page: &mut Builder, context: &Context) {
     let key = hotkey::key(&context.settings.config.hotkey);
     page.card(vec![
         Row::new("Dictation key").control(HOTKEY, Control::choice(key.label, false)),
+        Row::new("Mute system audio while recording").control(
+            MUTE,
+            Control::Switch {
+                on: context.settings.config.mute_output_while_recording,
+            },
+        ),
         Row::new("Start Inlay when I sign in")
             .control(LAUNCH, Control::Switch { on: context.launch }),
     ]);

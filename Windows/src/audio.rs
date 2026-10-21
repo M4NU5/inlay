@@ -142,7 +142,13 @@ where
     device.build_input_stream::<T, _, _>(
         config,
         move |data: &[T], _: &cpal::InputCallbackInfo| sink.push(data),
-        move |error| notify(Stop::Device(error.to_string())),
+        move |error: cpal::Error| {
+            // A glitch drops a few samples but the stream keeps running, so it
+            // must not end the take. Some USB microphones report one on start.
+            if !matches!(error.kind(), cpal::ErrorKind::Xrun) {
+                notify(Stop::Device(error.to_string()));
+            }
+        },
         None,
     )
 }
