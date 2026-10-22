@@ -1,8 +1,8 @@
 # Bun TypeScript server implementation plan
 
-This is the historical plan for replacing the packaged coordinator. It is not the current setup. The shipped server is `Server/`. The API version is 2, with routes still under `/v1`. Speech recognition is Parakeet, not Whisper. Current development uses [the development guide](development.md): `bun run dev` on port 8392 with data in `.local/dev-server`. Do not follow the API v1, Whisper, or `.local/typescript-server` notes below as present-day instructions.
+This is the historical plan for replacing the packaged coordinator. It is not the current setup. The shipped server is `Server/`. The API version is 4, with routes still under `/v1`. Speech recognition is Parakeet, not Whisper. Current development uses [the development guide](development.md): `bun run dev` on port 8392 with data in `.local/dev-server`. Do not follow the API v1, Whisper, or `.local/typescript-server` notes below as present-day instructions.
 
-Keep the native Swift client and replace the packaged HTTP coordinator with TypeScript, Fastify, and a Bun executable. The plan below was written to preserve the then-current API, archive layout, text behavior, and native inference helpers. The reference Swift server and domain packages remain available for source comparison. Verification follows [the development guide](development.md); automated tests are not allowed.
+Keep the native Swift client and replace the packaged HTTP coordinator with TypeScript, Fastify, and a Bun executable. The plan below was written to preserve the then-current API, archive layout, text behavior, and native inference helpers. The reference Swift server and domain packages remained available for source comparison at the time; the Swift server has since been deleted. Verification follows [the development guide](development.md); automated tests are not allowed.
 
 ## Phase 1: Contract and project foundation
 
@@ -54,6 +54,6 @@ typeOverrides:
 ## Intended result
 
 - Bun-managed Fastify server and standalone coordinators for the supported platforms.
-- The contract at the time of the plan, with generated TypeScript and Swift transport models. The shipped health field is API version 2.
+- The contract at the time of the plan, with generated TypeScript and Swift transport models. The shipped health field is API version 4.
 - Native Swift client behavior, native model helpers, and archive compatibility preserved.
 - Isolated verified draft, independent reviews, committed branch, and a green PR.
