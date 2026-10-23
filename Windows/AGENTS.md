@@ -30,6 +30,7 @@ cargo xwin build --release   # from WSL/Linux; on Windows use `cargo build --rel
    - The window: each page, and scrolling when it is smaller than its page. On This PC, **Connect** with a wrong token, with a LAN `http://` address (refused), and with the admin token. The log should show the PC enrolling, `GET /v1/devices` (admin token) should list it, and the Credential Manager entry should hold the new device credential, not the admin token. Confirm `config.json` and the Run key.
    - **Test microphone**: `GET /v1/generations` should show a `test` record with delivery `tested`, and nothing pasted.
    - History: filters, selecting a row, scrolling the list, and deleting one of your own test records.
+   - Server preferences: change a setting and a dictionary word, then **Save shared preferences**; `GET /v1/preferences` should show the new revision with fields the page doesn't edit, such as `vocabulary`, unchanged. Save from another device first, and the page should offer **Reload**. Put the server's preferences back afterwards.
    - A hold-to-talk take. The log should show admission, the microphone, uploaded frames and chunks, and the delivery status. `GET /v1/generations` should show the record with `device`, audio artifacts and `delivery`.
    - Paste into Notepad (Ctrl+V) and Windows Terminal (Ctrl+Shift+V), then confirm the clipboard comes back. `inlay.exe --paste TEXT` exercises the same path with known text.
    - **Copy last message**, and **Quit**.

@@ -28,6 +28,10 @@ pub enum Icon {
     Trash,
     Check,
     Paragraph,
+    Server,
+    Star,
+    StarFilled,
+    Remove,
 }
 
 impl Icon {
@@ -57,6 +61,10 @@ impl Icon {
                 canvas.check(x as f32 + half, y as f32 + half, size as f32 * 0.6, rgb);
             }
             Icon::Paragraph => canvas.paragraph(x, y, size, rgb),
+            Icon::Server => canvas.server(x, y, size, rgb),
+            Icon::Star => canvas.star(x, y, size, rgb, false),
+            Icon::StarFilled => canvas.star(x, y, size, rgb, true),
+            Icon::Remove => canvas.remove(x, y, size, rgb),
         }
     }
 }
@@ -131,6 +139,13 @@ pub enum Control {
         icon: Option<Icon>,
         enabled: bool,
     },
+    /// The header of a list that expands, such as a dictionary list: a
+    /// chevron, the name, and a count on the right. It fills its row.
+    Disclosure {
+        label: String,
+        count: String,
+        open: bool,
+    },
 }
 
 impl Control {
@@ -190,7 +205,9 @@ impl Control {
     /// The text a screen reader announces for the control.
     pub fn label(&self) -> Option<&str> {
         match self {
-            Control::Button { label, .. } | Control::Choice { text: label, .. } => Some(label),
+            Control::Button { label, .. }
+            | Control::Choice { text: label, .. }
+            | Control::Disclosure { label, .. } => Some(label),
             Control::Edit | Control::Switch { .. } => None,
         }
     }
@@ -208,6 +225,7 @@ impl Control {
                 (width.clamp(px(120), px(380)), px(30))
             }
             Control::Switch { .. } => (px(38), px(22)),
+            Control::Disclosure { .. } => (px(300), px(44)),
             Control::Button {
                 label, style, icon, ..
             } => match style {
@@ -309,6 +327,14 @@ impl Row {
     pub fn dot(self, colour: u32) -> Row {
         Row {
             dot: Some(colour),
+            ..self
+        }
+    }
+
+    /// A second, muted line under the label.
+    pub fn detail(self, text: &str) -> Row {
+        Row {
+            detail: Some(text.into()),
             ..self
         }
     }
@@ -680,7 +706,14 @@ impl Builder {
             }
         }
         if let Some(value) = &row.value {
-            let left = (label_left + label_width + px(16)).min(right);
+            // A second line under the label can run on under a short value.
+            let left = if row.detail.is_some() {
+                (right - theme::text_width(value, Font::Body))
+                    .max(label_left + label_width + px(16))
+            } else {
+                label_left + label_width + px(16)
+            }
+            .min(right);
             let ellipsis = if row.path {
                 DT_PATH_ELLIPSIS
             } else {
@@ -790,6 +823,28 @@ impl Builder {
             DT_LEFT | LINE | DT_END_ELLIPSIS,
         );
         self.y = below;
+    }
+
+    /// A card holding multi-line text box `id`, `height` logical pixels tall.
+    pub fn editor(&mut self, id: i32, height: i32) {
+        let area = self.band(px(height));
+        self.items.push(Item::Card(area));
+        let field = RECT {
+            left: area.left + px(INSET) - px(4),
+            top: area.top + px(10),
+            right: area.right - px(INSET) + px(4),
+            bottom: area.bottom - px(10),
+        };
+        self.items.push(Item::Field {
+            id,
+            area: RECT {
+                left: field.left - px(6),
+                top: field.top - px(4),
+                right: field.right + px(6),
+                bottom: field.bottom + px(4),
+            },
+        });
+        self.place(id, Control::Edit, field, theme::SURFACE);
     }
 
     /// A row of buttons. Primary buttons share the width the others leave.
@@ -1011,6 +1066,41 @@ pub fn draw(canvas: &Canvas, area: RECT, placed: &Placed, look: Look) {
                 area.left as f32 + 2.5 * s + knob
             };
             canvas.circle(x, middle, knob, theme::INK);
+        }
+        Control::Disclosure { label, count, open } => {
+            if look.hot {
+                canvas.round(area, 8.0 * s, rest(false));
+            }
+            if look.focused {
+                canvas.outline(area, 8.0 * s, theme::ACCENT, 1.5 * s);
+            }
+            let size = px(18);
+            let top = (middle as i32) - size / 2;
+            canvas.disclosure(area.left + px(4), top, size, theme::MUTED, *open);
+            let width = canvas.text_width(count, Font::Body);
+            let right = area.right - px(10);
+            canvas.text(
+                count,
+                RECT {
+                    left: right - width - px(2),
+                    right,
+                    ..area
+                },
+                Font::Body,
+                theme::MUTED,
+                DT_RIGHT | LINE,
+            );
+            canvas.text(
+                label,
+                RECT {
+                    left: area.left + px(30),
+                    right: right - width - px(16),
+                    ..area
+                },
+                Font::Body,
+                theme::INK,
+                DT_LEFT | LINE | DT_END_ELLIPSIS,
+            );
         }
         Control::Button {
             label,

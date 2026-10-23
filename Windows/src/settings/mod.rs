@@ -3,12 +3,14 @@
 //! whenever it changes (see `layout.rs`). Text boxes are borderless Win32
 //! edits; every other control is an owner-drawn button, and choices open the
 //! shared popup list. Changes apply as they are made, except the connection,
-//! which applies on Connect.
+//! which applies on Connect, and the server's shared preferences, which apply
+//! on Save.
 
 mod dictation;
 mod history;
 mod layout;
 mod microphone;
+mod server;
 mod this_pc;
 
 use self::layout::{Builder, Control, Icon, Layout, Look};
@@ -30,10 +32,12 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, EM_SETMARGINS, ODS_FOCUS, ODS_NOFOCUSRECT, ODS_SELECTED, WM_MOUSELEAVE,
+    DRAWITEMSTRUCT, EM_SETMARGINS, ODS_FOCUS, ODS_NOFOCUSRECT, ODS_SELECTED, SetWindowTheme,
+    WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, IsWindowEnabled, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    VK_ESCAPE, VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -41,20 +45,24 @@ static WINDOW: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 /// The button class's own window procedure, wrapped to track hover.
 static BUTTON_PROC: AtomicUsize = AtomicUsize::new(0);
 static HOT: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+/// The cleanup instructions box's own window procedure, wrapped for its keys.
+static PROMPT_PROC: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Dictation,
     History,
     Microphone,
+    Server,
     ThisPc,
 }
 
 /// The sidebar, in the Mac app's order.
-const PAGES: [Page; 4] = [
+const PAGES: [Page; 5] = [
     Page::Dictation,
     Page::History,
     Page::Microphone,
+    Page::Server,
     Page::ThisPc,
 ];
 
@@ -64,6 +72,7 @@ impl Page {
             Page::Dictation => "Dictation",
             Page::History => "History",
             Page::Microphone => "Microphone",
+            Page::Server => "Server preferences",
             Page::ThisPc => "This PC",
         }
     }
@@ -73,6 +82,7 @@ impl Page {
             Page::Dictation => Icon::Waveform,
             Page::History => Icon::Clock,
             Page::Microphone => Icon::Microphone,
+            Page::Server => Icon::Server,
             Page::ThisPc => Icon::Laptop,
         }
     }
@@ -86,6 +96,7 @@ impl Page {
             Page::Dictation => dictation::build(page, context),
             Page::History => history::build(page, context),
             Page::Microphone => microphone::build(page, context),
+            Page::Server => server::build(page, context),
             Page::ThisPc => this_pc::build(page, context),
         }
     }
@@ -128,6 +139,8 @@ struct State {
     microphone_choices: Vec<Option<String>>,
     launch: bool,
     message: Option<Message>,
+    /// Server preferences' dictionary controls that exist, by id.
+    dynamic: Vec<i32>,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
@@ -139,6 +152,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     microphone_choices: Vec::new(),
     launch: false,
     message: None,
+    dynamic: Vec::new(),
 });
 
 // Controls. A control can appear on more than one page, such as Test
@@ -167,12 +181,27 @@ const OPEN_ORIGINAL: i32 = 148;
 const REPROCESS: i32 = 149;
 const DELETE_AUDIO: i32 = 150;
 const RETRY_DETAIL: i32 = 151;
+const SAVE_SHARED: i32 = 152;
+const DISCARD: i32 = 153;
+const RELOAD: i32 = 154;
+const LANGUAGE: i32 = 155;
+const CORRECTION: i32 = 156;
+const RESET_PROMPT: i32 = 157;
+const KEEP_ORIGINAL: i32 = 158;
+const RETENTION: i32 = 159;
+const PURGE_ORIGINAL: i32 = 160;
+const PURGE_ALL: i32 = 161;
+const ADD_LIST: i32 = 162;
+/// The cleanup instructions, a multi-line text box.
+const PROMPT: i32 = 163;
 /// History's rows, which are painted, not controls: `ROW + index`.
 const ROW: i32 = 6000;
 /// Sidebar buttons: `NAV + index`.
 const NAV: i32 = 120;
+/// Server preferences' dictionary controls, made as they are shown: `DYNAMIC + slot`.
+const DYNAMIC: i32 = 40000;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 21] = [
+const BUTTONS: [i32; 32] = [
     CHECK,
     COPY,
     TEST,
@@ -194,16 +223,33 @@ const BUTTONS: [i32; 21] = [
     HOTKEY,
     LAUNCH,
     MUTE,
+    SAVE_SHARED,
+    DISCARD,
+    RELOAD,
+    LANGUAGE,
+    CORRECTION,
+    RESET_PROMPT,
+    KEEP_ORIGINAL,
+    RETENTION,
+    PURGE_ORIGINAL,
+    PURGE_ALL,
+    ADD_LIST,
 ];
 /// Popup list choices: `PICK_MICROPHONE + index` and `PICK_HOTKEY + index`.
 const PICK_MICROPHONE: usize = 1000;
 const PICK_HOTKEY: usize = 2000;
 const PICK_DEVICE: usize = 3000;
 const PICK_SOURCE: usize = 4000;
+const PICK_LANGUAGE: usize = 5000;
+const PICK_RETENTION: usize = 5500;
+/// Where popup choices end and History's rows begin.
+const PICK_END: usize = ROW as usize;
 /// A History request finished; lay the page out again.
 const WM_HISTORY: u32 = WM_APP + 30;
 /// This PC enrolled and now holds its own credential instead of the admin token.
 const WM_TOKEN: u32 = WM_APP + 31;
+/// A Server preferences request finished; lay the page out again.
+const WM_SERVER: u32 = WM_APP + 32;
 /// `EM_SETCUEBANNER`: grey hint text in an empty text box.
 const EM_SETCUEBANNER: u32 = 0x1501;
 /// `WM_DEVICECHANGE` with `DBT_DEVNODES_CHANGED`: a device came or went.
@@ -249,8 +295,13 @@ pub fn close() {
 pub fn refresh() {
     let window = window();
     if !window.is_null() {
-        if state().page == Page::History {
-            history::catch_up(window, finished());
+        match state().page {
+            Page::History => history::catch_up(window, finished()),
+            Page::Server => server::catch_up(
+                window,
+                &app::shared().status(|status| status.server.clone()),
+            ),
+            _ => {}
         }
         relayout(window);
     }
@@ -347,6 +398,17 @@ pub fn open(page: Page) {
                 text.as_ptr() as LPARAM,
             );
         };
+        let style = WS_TABSTOP
+            | WS_VSCROLL
+            | ES_MULTILINE as u32
+            | ES_WANTRETURN as u32
+            | ES_AUTOVSCROLL as u32;
+        let prompt = control(window, "EDIT", "", style, PROMPT);
+        SendMessageW(prompt, EM_SETMARGINS, 3, 0);
+        let dark = wide("DarkMode_Explorer");
+        SetWindowTheme(prompt, dark.as_ptr(), null());
+        let original = SetWindowLongPtrW(prompt, GWLP_WNDPROC, prompt_proc as *const () as isize);
+        PROMPT_PROC.store(original as usize, Ordering::SeqCst);
         cue(ENDPOINT, config::DEFAULT_ENDPOINT);
         cue(TOKEN, "None");
         for id in BUTTONS {
@@ -429,6 +491,26 @@ unsafe extern "system" fn button_proc(
     }
     let original: WNDPROC = unsafe { std::mem::transmute(BUTTON_PROC.load(Ordering::SeqCst)) };
     unsafe { CallWindowProcW(original, window, message, wparam, lparam) }
+}
+
+/// A multi-line text box asks the dialog manager for every key, so Tab and
+/// Esc would stay inside it, and Esc would close the window. Leave those two
+/// to the window: Tab moves on, and Esc does nothing.
+unsafe extern "system" fn prompt_proc(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let original: WNDPROC = unsafe { std::mem::transmute(PROMPT_PROC.load(Ordering::SeqCst)) };
+    let result = unsafe { CallWindowProcW(original, window, message, wparam, lparam) };
+    if message == WM_GETDLGCODE && lparam != 0 {
+        let key = unsafe { &*(lparam as *const MSG) };
+        if key.message == WM_KEYDOWN && matches!(key.wParam as u16, VK_TAB | VK_ESCAPE) {
+            return result & !((DLGC_WANTALLKEYS | DLGC_WANTTAB | DLGC_WANTMESSAGE) as LRESULT);
+        }
+    }
+    result
 }
 
 /// Loads the saved connection into the text boxes, and this PC's state.
@@ -516,6 +598,14 @@ fn relayout(window: HWND) {
     let mut builder = Builder::new(left, left + width, px(TOP), client.bottom);
     page.build(&mut builder, &context);
     let layout = builder.finish();
+    if let Some(prompt) = server::take_resync() {
+        // The draft was replaced: remake the dictionary's boxes from it.
+        let dynamic = std::mem::take(&mut state().dynamic);
+        for id in dynamic {
+            unsafe { DestroyWindow(GetDlgItem(window, id)) };
+        }
+        set_text(window, PROMPT, &crlf(&prompt));
+    }
     {
         let mut state = state();
         state.scroll = state
@@ -536,7 +626,10 @@ fn place_controls(window: HWND) {
     unsafe {
         let mut after = GetDlgItem(window, NAV + PAGES.len() as i32 - 1);
         for each in &placed {
-            let control = GetDlgItem(window, each.id);
+            let mut control = GetDlgItem(window, each.id);
+            if control.is_null() && each.id >= DYNAMIC {
+                control = make_dynamic(window, each);
+            }
             let area = each.area;
             SetWindowPos(
                 control,
@@ -556,7 +649,21 @@ fn place_controls(window: HWND) {
             EnableWindow(control, each.control.is_enabled() as i32);
             InvalidateRect(control, null(), 0);
         }
-        for id in EDITS.into_iter().chain(BUTTONS) {
+        // Dictionary controls the page no longer shows go, such as a removed
+        // word's or a closed list's; showing them again makes them afresh.
+        let gone: Vec<i32> = {
+            let mut state = state();
+            let (kept, gone) = state
+                .dynamic
+                .iter()
+                .partition(|id| placed.iter().any(|each| each.id == **id));
+            state.dynamic = kept;
+            gone
+        };
+        for id in gone {
+            DestroyWindow(GetDlgItem(window, id));
+        }
+        for id in EDITS.into_iter().chain(BUTTONS).chain([PROMPT]) {
             if !placed.iter().any(|each| each.id == id) {
                 ShowWindow(GetDlgItem(window, id), SW_HIDE);
             }
@@ -574,6 +681,30 @@ fn place_controls(window: HWND) {
         }
         InvalidateRect(window, null(), 0);
     }
+}
+
+/// Makes a dictionary control the first time the layout places it.
+fn make_dynamic(window: HWND, placed: &layout::Placed) -> HWND {
+    let control = match placed.control {
+        layout::Control::Edit => {
+            let start = server::text_box(placed.id).unwrap_or_default();
+            let align = if start.right { ES_RIGHT as u32 } else { 0 };
+            let style = WS_TABSTOP | ES_AUTOHSCROLL as u32 | align;
+            let edit = control(window, "EDIT", &start.text, style, placed.id);
+            unsafe {
+                SendMessageW(edit, EM_SETMARGINS, 3, 0);
+                let cue = wide(start.cue);
+                SendMessageW(edit, EM_SETCUEBANNER, 1, cue.as_ptr() as LPARAM);
+                if start.small {
+                    SendMessageW(edit, WM_SETFONT, theme::font(Font::Small) as WPARAM, 1);
+                }
+            }
+            edit
+        }
+        _ => button(window, placed.id, ""),
+    };
+    state().dynamic.push(placed.id);
+    control
 }
 
 /// The scrolling pane under a point in the window, if any.
@@ -652,6 +783,9 @@ fn show_page(window: HWND, page: Page) {
     }
     if page == Page::History {
         history::opened(window, finished());
+    }
+    if page == Page::Server {
+        server::opened(window);
     }
     set_window_title(window, &format!("Inlay · {}", page.title()));
     unsafe {
@@ -814,6 +948,14 @@ fn open_choice(window: HWND, id: i32) {
         let selected = choices.iter().position(|choice| *choice == saved);
         state.microphone_choices = choices;
         (labels, selected, PICK_MICROPHONE)
+    } else if id == LANGUAGE || id == RETENTION {
+        let (labels, selected) = server::choices(id);
+        let base = if id == LANGUAGE {
+            PICK_LANGUAGE
+        } else {
+            PICK_RETENTION
+        };
+        (labels, selected, base)
     } else if id == DEVICE || id == SOURCE {
         let (labels, selected) = history::choices(id);
         let base = if id == DEVICE {
@@ -851,6 +993,17 @@ fn open_choice(window: HWND, id: i32) {
 
 /// Applies a choice from the popup list.
 fn pick(window: HWND, id: usize) {
+    if id >= PICK_LANGUAGE {
+        let field = if id >= PICK_RETENTION {
+            server::choose_retention(id - PICK_RETENTION);
+            RETENTION
+        } else {
+            server::choose_language(id - PICK_LANGUAGE);
+            LANGUAGE
+        };
+        unsafe { SetFocus(GetDlgItem(window, field)) };
+        return relayout(window);
+    }
     if id >= PICK_DEVICE {
         if id >= PICK_SOURCE {
             history::choose_source(window, id - PICK_SOURCE);
@@ -947,7 +1100,25 @@ fn command(window: HWND, id: i32) {
         GEAR => return show_page(window, Page::ThisPc),
         HISTORY => return show_page(window, Page::History),
         CONNECT => return connect(window),
-        MICROPHONE | HOTKEY | DEVICE | SOURCE => return open_choice(window, id),
+        MICROPHONE | HOTKEY | DEVICE | SOURCE | LANGUAGE | RETENTION => {
+            return open_choice(window, id);
+        }
+        SAVE_SHARED => server::save(window),
+        DISCARD | RELOAD => server::discard(),
+        CORRECTION => server::toggle_correction(),
+        KEEP_ORIGINAL => server::toggle_keep_original(),
+        RESET_PROMPT => {
+            if let Some(prompt) = server::reset_prompt() {
+                set_text(window, PROMPT, &crlf(&prompt));
+            }
+        }
+        PURGE_ORIGINAL | PURGE_ALL => server::purge(window, id == PURGE_ALL),
+        ADD_LIST => server::add_list(),
+        _ if id >= DYNAMIC => {
+            if !server::command(id) {
+                return;
+            }
+        }
         REFRESH => history::load(window, false),
         LOAD => history::load(window, true),
         RECORD_COPY => history::copy(),
@@ -1025,7 +1196,7 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
-        WM_HISTORY => {
+        WM_HISTORY | WM_SERVER => {
             relayout(window);
             0
         }
@@ -1071,9 +1242,17 @@ unsafe extern "system" fn window_proc(
                     InvalidateRect(lparam as HWND, null(), 1);
                     InvalidateRect(window, null(), 0);
                 },
+                EN_CHANGE if id == PROMPT || id >= DYNAMIC => {
+                    let text = text(window, id).replace("\r\n", "\n");
+                    if server::edited(id, &text) {
+                        relayout(window);
+                    }
+                }
                 BN_SETFOCUS => reveal(window, id),
                 BN_CLICKED | BN_DOUBLECLICKED => match id {
-                    _ if id as usize >= PICK_MICROPHONE => pick(window, id as usize),
+                    _ if (PICK_MICROPHONE..PICK_END).contains(&(id as usize)) => {
+                        pick(window, id as usize)
+                    }
                     // Enter sends IDOK: press the focused button, or Connect from a text box.
                     IDOK => {
                         let focus = unsafe { GetDlgCtrlID(GetFocus()) };
@@ -1093,6 +1272,8 @@ unsafe extern "system" fn window_proc(
             WINDOW.store(null_mut(), Ordering::SeqCst);
             HOT.store(null_mut(), Ordering::SeqCst);
             state().layout = Layout::EMPTY;
+            state().dynamic.clear();
+            server::closed();
             0
         }
         _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
@@ -1115,6 +1296,11 @@ fn text(window: HWND, id: i32) -> String {
 fn set_text(window: HWND, id: i32, value: &str) {
     let value = wide(value);
     unsafe { SetWindowTextW(GetDlgItem(window, id), value.as_ptr()) };
+}
+
+/// Text for a multi-line box, which breaks lines with CR LF.
+fn crlf(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
 fn set_window_title(window: HWND, value: &str) {

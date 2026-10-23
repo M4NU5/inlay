@@ -2,8 +2,8 @@
 //! Each take builds its own `Api`, so editing settings mid-take cannot send its
 //! audio or token to a different server.
 
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
@@ -90,6 +90,101 @@ pub struct Health {
     pub ready: bool,
     #[serde(default)]
     pub message: Option<String>,
+    #[serde(default)]
+    pub server_version: Option<String>,
+    #[serde(default)]
+    pub speech: Option<Runtime>,
+    #[serde(default)]
+    pub proofreading: Option<Runtime>,
+}
+
+/// One of the server's models, as Server preferences shows it.
+#[derive(Clone, Deserialize)]
+pub struct Runtime {
+    #[serde(rename = "modelID")]
+    pub model_id: String,
+    pub backend: String,
+    pub ready: bool,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// The shared preferences and the revision a save must name.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct Shared {
+    pub revision: u64,
+    pub preferences: SharedPreferences,
+}
+
+/// The server's shared preferences. Fields this client doesn't edit, and any
+/// a newer server adds, ride along in `other` so a save keeps them.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedPreferences {
+    pub language: String,
+    #[serde(default = "default_prompt")]
+    pub proofreading_prompt: String,
+    pub dictionary: Dictionary,
+    pub text_correction_enabled: bool,
+    pub keep_original_audio: bool,
+    #[serde(default = "default_retention")]
+    pub audio_retention_days: u32,
+    #[serde(flatten)]
+    pub other: serde_json::Map<String, Value>,
+}
+
+/// The server's built-in cleanup instructions, as the Mac's Reset to default uses.
+pub const DEFAULT_PROMPT: &str = include_str!("../../Server/api/default-proofreading-prompt.txt");
+
+fn default_prompt() -> String {
+    DEFAULT_PROMPT.into()
+}
+
+fn default_retention() -> u32 {
+    90
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct Dictionary {
+    pub lists: Vec<DictionaryList>,
+    #[serde(flatten)]
+    pub other: serde_json::Map<String, Value>,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct DictionaryList {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub entries: Vec<DictionaryEntry>,
+    #[serde(flatten)]
+    pub other: serde_json::Map<String, Value>,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictionaryEntry {
+    pub id: String,
+    pub term: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub is_priority: bool,
+    #[serde(flatten)]
+    pub other: serde_json::Map<String, Value>,
+}
+
+/// How much recording audio the server holds.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Storage {
+    pub generation_count: u64,
+    pub audio_byte_count: u64,
+    pub inference_byte_count: u64,
+    pub original_byte_count: u64,
+    #[serde(default)]
+    pub oldest_audio_at: Option<String>,
+    pub free_byte_count: u64,
 }
 
 #[derive(Clone, Deserialize)]
@@ -395,6 +490,39 @@ impl Api {
                 result => return result,
             }
         }
+    }
+
+    pub fn preferences(&self) -> Result<Shared, ApiError> {
+        decode(send(self.request("GET", "v1/preferences"), Body::Empty)?)
+    }
+
+    /// Saves `shared.preferences` over revision `shared.revision`. The server
+    /// answers 409 when another device saved first.
+    pub fn save_preferences(&self, shared: &Shared) -> Result<Shared, ApiError> {
+        let body =
+            serde_json::to_value(shared).map_err(|error| ApiError::Invalid(error.to_string()))?;
+        decode(send(
+            self.request("PUT", "v1/preferences"),
+            Body::Json(&body),
+        )?)
+    }
+
+    pub fn storage(&self) -> Result<Storage, ApiError> {
+        decode(send(self.request("GET", "v1/storage"), Body::Empty)?)
+    }
+
+    /// Deletes finished takes' audio of `kind` (`original`), or all of it.
+    /// Their text stays in history.
+    pub fn purge_audio(&self, kind: Option<&str>) -> Result<(), ApiError> {
+        let body = match kind {
+            Some(kind) => json!({ "kind": kind }),
+            None => json!({}),
+        };
+        send(
+            self.request("POST", "v1/storage/purge-audio"),
+            Body::Json(&body),
+        )
+        .map(drop)
     }
 
     /// Fifty records of shared history, older than `before` when given.

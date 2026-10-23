@@ -61,7 +61,7 @@ No installer or administrator rights are needed.
 
 ## Configure
 
-Choose **Open Inlay…** from the tray menu. The window follows the Mac app: a sidebar with **Dictation**, **History**, **Microphone** and **This PC** pages. Changes apply as you make them, except the connection, which applies when you select **Connect**.
+Choose **Open Inlay…** from the tray menu. The window follows the Mac app: a sidebar with **Dictation**, **History**, **Microphone**, **Server preferences** and **This PC** pages. Changes apply as you make them, except the connection, which applies when you select **Connect**, and server preferences, which apply when you select **Save shared preferences**.
 
 **History** lists shared history from the server, newest first, filtered by device and source. Select a dictation to read its transcript and the original one, copy it, delete it from the server, or open its audio in your default player. **Delete audio** removes a recording's audio and keeps its text. A failed or cancelled take whose audio is still on the server has **Transcribe again**. **Load older** fetches the next 50.
 
@@ -76,7 +76,7 @@ Choose **Open Inlay…** from the tray menu. The window follows the Mac app: a s
 
 **Connect** saves the address, token and device name, then checks the server. With the admin token, that check enrolls this PC (`POST /v1/devices/enroll`) and replaces the token with the credential the server returns, as the Mac app does. The admin token itself can only enroll devices. If the server refuses a token, Inlay checks again once a minute instead of every five seconds, so it doesn't trip the server's sign-in throttle. The status beside it, on the Dictation page and at the foot of the sidebar shows the result. A server on WSL is reachable from Windows at `http://127.0.0.1:8391`.
 
-Shared settings (language, dictionary, proofreading, original audio and how long audio is kept) belong to the server. Edit them from the Mac app or the API. Each take uses the server's settings snapshot from when it started.
+**Server preferences** edits the settings every device shares, which belong to the server: the proofreading language, whether Qwen proofreads and its cleanup instructions, whether original microphone audio is kept and for how long, and the dictionary. It also shows the server's models and how much audio it holds, and can delete original audio or all audio. Changes collect until you select **Save shared preferences** or **Discard changes**. If another device saves first, the save is refused and **Reload** brings in its version. Each take uses the server's settings snapshot from when it started.
 
 Files:
 

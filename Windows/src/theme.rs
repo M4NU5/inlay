@@ -630,6 +630,82 @@ impl Canvas {
         self.lines(&[at(14.0, 10.0), at(13.7, 17.0)], rgb, width);
     }
 
+    /// Two stacked server units, the Server preferences page's icon.
+    pub fn server(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let part = |top: f32| RECT {
+            left: x + (3.5 * unit) as i32,
+            top: y + (top * unit) as i32,
+            right: x + (20.5 * unit) as i32,
+            bottom: y + ((top + 7.5) * unit) as i32,
+        };
+        for top in [3.5, 13.0] {
+            self.outline(part(top), 2.0 * unit, rgb, 1.6 * unit);
+            self.circle(
+                x as f32 + 7.5 * unit,
+                y as f32 + (top + 3.75) * unit,
+                1.1 * unit,
+                rgb,
+            );
+        }
+    }
+
+    /// A five-pointed star, filled when `filled`, for a priority word.
+    pub fn star(&self, x: i32, y: i32, size: i32, rgb: u32, filled: bool) {
+        let unit = size as f32 / 24.0;
+        let (cx, cy) = (x as f32 + 12.0 * unit, y as f32 + 12.8 * unit);
+        let points: Vec<PointF> = (0..=10)
+            .map(|index| {
+                let radius = if index % 2 == 0 { 9.5 } else { 4.0 } * unit;
+                let angle = (index as f32 * 36.0 - 90.0).to_radians();
+                PointF {
+                    X: cx + radius * angle.cos(),
+                    Y: cy + radius * angle.sin(),
+                }
+            })
+            .collect();
+        if filled {
+            unsafe {
+                let mut brush = null_mut();
+                GdipCreateSolidFill(argb(rgb), &mut brush);
+                GdipFillPolygon(
+                    self.graphics,
+                    brush.cast(),
+                    points.as_ptr(),
+                    points.len() as i32,
+                    FillModeAlternate,
+                );
+                GdipDeleteBrush(brush.cast());
+            }
+        }
+        let outline: Vec<(f32, f32)> = points.iter().map(|point| (point.X, point.Y)).collect();
+        self.lines(&outline, rgb, 1.5 * unit);
+    }
+
+    /// A circle with a minus sign, the Remove icon.
+    pub fn remove(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let (cx, cy) = (x as f32 + 12.0 * unit, y as f32 + 12.0 * unit);
+        self.arc((cx, cy), 8.5 * unit, (0.0, 360.0), rgb, 1.6 * unit);
+        self.lines(
+            &[(cx - 4.0 * unit, cy), (cx + 4.0 * unit, cy)],
+            rgb,
+            1.8 * unit,
+        );
+    }
+
+    /// A chevron pointing right, or down when `open`, for a list that expands.
+    pub fn disclosure(&self, x: i32, y: i32, size: i32, rgb: u32, open: bool) {
+        let unit = size as f32 / 24.0;
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        let points = if open {
+            [at(7.0, 9.5), at(12.0, 14.5), at(17.0, 9.5)]
+        } else {
+            [at(9.5, 7.0), at(14.5, 12.0), at(9.5, 17.0)]
+        };
+        self.lines(&points, rgb, 1.8 * unit);
+    }
+
     /// Lines of text, for an empty detail pane.
     pub fn paragraph(&self, x: i32, y: i32, size: i32, rgb: u32) {
         let unit = size as f32 / 24.0;
