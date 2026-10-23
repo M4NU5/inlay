@@ -1172,6 +1172,16 @@ fn date_label(created: &str, long: bool) -> String {
     )
 }
 
+/// The day of an RFC 3339 time, such as "23 Oct 2026".
+pub fn day_label(time: &str) -> Option<String> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let time = local_time(time)?;
+    let month = MONTHS[(time.wMonth.clamp(1, 12) - 1) as usize];
+    Some(format!("{} {month} {}", time.wDay, time.wYear))
+}
+
 /// An RFC 3339 time from the server, in this PC's time zone.
 fn local_time(created: &str) -> Option<SYSTEMTIME> {
     let since = humantime::parse_rfc3339(created)
