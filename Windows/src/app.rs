@@ -9,13 +9,23 @@ use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
+use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
 static SHARED: OnceLock<Arc<App>> = OnceLock::new();
+/// How many shortcut check events stay on screen. Matches the Mac client.
+const CHECK_LINES: usize = 16;
 
 thread_local! {
     /// The last notice raised on this thread. Each take runs on its own
     /// thread, so a test's failure reason can't be mixed up with another take's.
     static LAST_NOTICE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+fn foreground_is_ours() -> bool {
+    let mut process = 0;
+    unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut process) };
+    process == unsafe { GetCurrentProcessId() }
 }
 
 /// Makes the app reachable from Win32 window procedures, which take no context.
@@ -81,6 +91,10 @@ pub struct Status {
     pub capturing_since: Option<Instant>,
     /// When and how the last transcript went out, for the recording pill.
     pub delivered: Option<(Instant, paste::Delivered)>,
+    /// When the running shortcut check started.
+    pub checking: Option<Instant>,
+    /// The latest shortcut check's events, oldest first. Kept in memory only.
+    pub check_lines: Vec<String>,
 }
 
 /// Why the server can't take a dictation.
@@ -140,6 +154,8 @@ impl App {
                 error: None,
                 capturing_since: None,
                 delivered: None,
+                checking: None,
+                check_lines: Vec::new(),
             }),
             events,
             wake_monitor,
@@ -239,6 +255,40 @@ impl App {
     }
 
     /// An informational tooltip message, such as "No speech detected".
+    /// Starts a shortcut check's list of events afresh.
+    pub fn check_started(&self, first: &str) {
+        self.update(|status| {
+            status.checking = Some(Instant::now());
+            status.check_lines.clear();
+        });
+        self.check_line(first);
+    }
+
+    /// Adds a line to the running shortcut check, as on the Mac: the time
+    /// since it started, and whether Inlay or another app was in front.
+    pub fn check_line(&self, text: &str) {
+        let front = if foreground_is_ours() {
+            "Inlay"
+        } else {
+            "background"
+        };
+        self.update(|status| {
+            if let Some(started) = status.checking {
+                let seconds = started.elapsed().as_secs_f64();
+                status
+                    .check_lines
+                    .push(format!("{seconds:.2}s [{front}] {text}"));
+                let extra = status.check_lines.len().saturating_sub(CHECK_LINES);
+                status.check_lines.drain(..extra);
+            }
+        });
+    }
+
+    pub fn check_ended(&self) {
+        self.check_line("Check ended. No audio was recorded.");
+        self.update(|status| status.checking = None);
+    }
+
     pub fn note(&self, text: &str) {
         log!("note: {text}");
         self.notice(text, false, Duration::from_secs(5));

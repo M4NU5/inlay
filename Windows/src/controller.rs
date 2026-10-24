@@ -4,6 +4,9 @@
 //! release until the next. Takes run on their own threads, so a new one can
 //! start while earlier takes are still uploading or transcribing. The window's
 //! Test microphone button starts and finishes a test take the same way.
+//!
+//! A shortcut check, as on the Mac, runs the same machine for a minute with
+//! the microphone off, and lists what the key did on This PC.
 
 use crate::app::App;
 use crate::hotkey::{self, Edge, Trigger};
@@ -18,6 +21,8 @@ pub enum Event {
     TakeEnded(u64),
     /// Test microphone: start a test take, or finish the one recording.
     Test,
+    /// Start (`true`) or stop the shortcut check.
+    Check(bool),
     /// Quit: cancel any recording, then acknowledge.
     Quit(Sender<()>),
 }
@@ -30,6 +35,8 @@ const ACCEPT_DELAY: Duration = Duration::from_millis(180);
 const WATCHDOG: Duration = Duration::from_millis(100);
 /// Two taps this close together make a double tap. Matches the Mac client.
 const DOUBLE_TAP: Duration = Duration::from_millis(450);
+/// How long a shortcut check listens. Matches the Mac client.
+const CHECK: Duration = Duration::from_secs(60);
 
 enum Phase {
     Idle,
@@ -61,6 +68,24 @@ impl Phase {
             Phase::Idle | Phase::Testing(_) | Phase::Latched(_, Key::Up)
         )
     }
+
+    /// Whether a take is recording.
+    fn records(&self) -> bool {
+        matches!(
+            self,
+            Phase::Recording(_) | Phase::Latched(..) | Phase::Testing(_)
+        )
+    }
+
+    /// Waits for a fresh press, so a key held as a shortcut check starts or
+    /// ends can't open the microphone.
+    fn fresh(self) -> Phase {
+        match self {
+            phase if phase.records() => phase,
+            _ if hotkey::is_held() => Phase::Blocked,
+            _ => Phase::Idle,
+        }
+    }
 }
 
 pub fn run(app: Arc<App>, events: Receiver<Event>) {
@@ -69,6 +94,8 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
     let mut missed_releases = 0;
     // The last tap that didn't toggle, for a double tap.
     let mut last_tap: Option<Instant> = None;
+    // When the running shortcut check ends.
+    let mut check: Option<Instant> = None;
     loop {
         let timeout = match &phase {
             Phase::Pending(since) => {
@@ -76,6 +103,14 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
             }
             phase if phase.holds_key() => Some(WATCHDOG),
             _ => None,
+        };
+        let timeout = match (timeout, check) {
+            (Some(timeout), Some(end)) => {
+                Some(timeout.min(end.saturating_duration_since(Instant::now())))
+            }
+            (timeout, end) => {
+                timeout.or(end.map(|end| end.saturating_duration_since(Instant::now())))
+            }
         };
         let event = match timeout {
             None => match events.recv() {
@@ -106,6 +141,9 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
                     None
                 } else {
                     log!("hotkey: key-up not seen; treating the key as released");
+                    if check.is_some() {
+                        app.check_line("Key-up not seen; treating the key as released.");
+                    }
                     hotkey::forget_hold();
                     Some(Event::Hotkey(Edge::Released))
                 }
@@ -118,6 +156,40 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
         if event.is_some() {
             missed_releases = 0;
         }
+        let event = match event {
+            Some(Event::Check(true)) if check.is_none() && !phase.records() => {
+                check = Some(Instant::now() + CHECK);
+                let config = app.settings().config;
+                app.check_started(&format!(
+                    "Checking {} ({}) for 60 seconds. The microphone stays off.",
+                    hotkey::key(&config.hotkey).label,
+                    hotkey::Trigger::from_id(&config.activation_mode)
+                        .label()
+                        .to_lowercase(),
+                ));
+                phase = phase.fresh();
+                None
+            }
+            Some(Event::Check(_)) => {
+                if check.take().is_some() {
+                    app.check_ended();
+                    phase = phase.fresh();
+                }
+                None
+            }
+            event => event,
+        };
+        if check.is_some_and(|end| Instant::now() >= end) {
+            check = None;
+            app.check_ended();
+            phase = phase.fresh();
+        }
+        let checking = check.is_some();
+        let say = |text: &str| {
+            if checking {
+                app.check_line(text);
+            }
+        };
         // A tap toggles recording, except that Double tap needs a second one.
         let mut toggles = |at: Instant| {
             if hotkey::current_trigger() != Trigger::DoubleTap {
@@ -129,25 +201,37 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
         };
         phase = match (phase, event) {
             (Phase::Idle, Some(Event::Hotkey(Edge::Pressed))) => {
+                say("Key down.");
                 if hotkey::current_trigger() == Trigger::Hold {
                     Phase::Pending(Instant::now())
                 } else {
                     Phase::Tapping
                 }
             }
-            (Phase::Pending(_) | Phase::Blocked, Some(Event::Hotkey(Edge::Released))) => {
+            (Phase::Pending(_), Some(Event::Hotkey(Edge::Released))) => {
+                say("Key up before the hold was accepted, so nothing started.");
+                Phase::Idle
+            }
+            (Phase::Blocked, Some(Event::Hotkey(Edge::Released))) => {
+                say("Key up.");
                 Phase::Idle
             }
             (Phase::Pending(_) | Phase::Tapping, Some(Event::Hotkey(Edge::OtherKey))) => {
+                say("Another key was pressed: a shortcut, not dictation.");
                 Phase::Blocked
             }
             (Phase::Tapping, Some(Event::Hotkey(Edge::Released))) => {
-                if toggles(Instant::now()) {
+                say("Key up.");
+                if !toggles(Instant::now()) {
+                    say("Tap ignored: double tap to toggle recording.");
+                    Phase::Idle
+                } else if checking {
+                    say("Shortcut recognized. Recording was intentionally skipped.");
+                    Phase::Idle
+                } else {
                     takes += 1;
                     log!("hotkey: tap accepted; starting take {takes}");
                     Phase::Latched(take::start(takes, app.clone(), false), Key::Up)
-                } else {
-                    Phase::Idle
                 }
             }
             (Phase::Latched(take, Key::Up), Some(Event::Hotkey(Edge::Pressed))) => {
@@ -186,6 +270,10 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
                 } else {
                     Phase::Idle
                 }
+            }
+            (Phase::Pending(since), None) if since.elapsed() >= ACCEPT_DELAY && checking => {
+                say("Shortcut recognized. Recording was intentionally skipped.");
+                Phase::Blocked
             }
             (Phase::Pending(since), None) if since.elapsed() >= ACCEPT_DELAY => {
                 takes += 1;

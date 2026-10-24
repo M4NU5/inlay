@@ -120,6 +120,9 @@ pub struct Context {
     pub default_microphone: Option<String>,
     pub launch: bool,
     pub message: Option<Message>,
+    /// A shortcut check is running.
+    pub checking: bool,
+    pub check_lines: Vec<String>,
 }
 
 /// The result of the last change made on the page, when it needs saying.
@@ -171,6 +174,7 @@ const TEST: i32 = 110;
 const GEAR: i32 = 111;
 const MUTE: i32 = 112;
 const TRIGGER: i32 = 171;
+const SHORTCUT_CHECK: i32 = 172;
 const CLIPBOARD: i32 = 173;
 const MIC_SETTINGS: i32 = 174;
 const HISTORY: i32 = 140;
@@ -205,7 +209,7 @@ const NAV: i32 = 120;
 /// Server preferences' dictionary controls, made as they are shown: `DYNAMIC + slot`.
 const DYNAMIC: i32 = 40000;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 35] = [
+const BUTTONS: [i32; 36] = [
     CHECK,
     COPY,
     TEST,
@@ -226,6 +230,7 @@ const BUTTONS: [i32; 35] = [
     CONNECT,
     HOTKEY,
     TRIGGER,
+    SHORTCUT_CHECK,
     LAUNCH,
     MUTE,
     CLIPBOARD,
@@ -556,6 +561,8 @@ fn context() -> Context {
         default_microphone: None,
         launch: false,
         message: None,
+        checking: status.checking.is_some(),
+        check_lines: status.check_lines.clone(),
     });
     let state = state();
     context.microphones = state.microphones.clone();
@@ -1059,6 +1066,10 @@ fn pick(window: HWND, id: usize) {
     };
     if result.is_ok() {
         log!("settings: saved a change on this PC");
+        if field != MICROPHONE {
+            // A check names the key and trigger it started with.
+            let _ = app.events.send(Event::Check(false));
+        }
     }
     say(result.err().map(|text| Message { text, error: true }));
     unsafe { SetFocus(GetDlgItem(window, field)) };
@@ -1164,6 +1175,10 @@ fn command(window: HWND, id: i32) {
         LAUNCH => toggle_launch(),
         MUTE => toggle_mute(),
         CLIPBOARD => toggle_clipboard(),
+        SHORTCUT_CHECK => {
+            let checking = app.status(|status| status.checking.is_some());
+            let _ = app.events.send(Event::Check(!checking));
+        }
         MIC_SETTINGS => say(privacy::open_settings()
             .err()
             .map(|text| Message { text, error: true })),

@@ -2,8 +2,8 @@
 
 use super::layout::{Builder, Control, Row};
 use super::{
-    CLIPBOARD, CONNECT, Context, ENDPOINT, HOTKEY, LAUNCH, MIC_SETTINGS, MUTE, NAME, TOKEN,
-    TRIGGER, server_line,
+    CLIPBOARD, CONNECT, Context, ENDPOINT, HOTKEY, LAUNCH, MIC_SETTINGS, MUTE, NAME,
+    SHORTCUT_CHECK, TOKEN, TRIGGER, server_line,
 };
 use crate::app::Server;
 use crate::{config, hotkey, privacy, theme};
@@ -51,7 +51,17 @@ pub fn build(page: &mut Builder, context: &Context) {
             "Recording continues until you tap again or reach 3 minutes.",
         ));
     }
+    let (check, button) = match (context.checking, trigger) {
+        (false, _) => ("Shortcut check", "Check shortcut"),
+        (true, hotkey::Trigger::Hold) => ("Hold the key for a second", "Stop checking"),
+        (true, hotkey::Trigger::DoubleTap) => ("Double tap the key", "Stop checking"),
+        (true, hotkey::Trigger::Tap) => ("Tap the key", "Stop checking"),
+    };
     rows.extend([
+        Row::new(check).control(
+            SHORTCUT_CHECK,
+            Control::button(button).enabled(context.checking || !context.recording),
+        ),
         Row::new("Mute system audio while recording").control(
             MUTE,
             Control::Switch {
@@ -68,6 +78,16 @@ pub fn build(page: &mut Builder, context: &Context) {
             .control(LAUNCH, Control::Switch { on: context.launch }),
     ]);
     page.card(rows);
+    if context.checking || !context.check_lines.is_empty() {
+        page.gap(12);
+        page.text_card(
+            "Shortcut diagnostics",
+            "",
+            &context.check_lines.join("\n"),
+            theme::MUTED,
+            "",
+        );
+    }
     page.gap(32);
 
     page.section("Permissions");
