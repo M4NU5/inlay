@@ -21,12 +21,24 @@ pub struct Config {
     pub microphone: Option<String>,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    /// How the key starts and stops a take: the Mac's `hold`, `doubleTap` or
+    /// `tapToggle`.
+    #[serde(default = "default_trigger")]
+    pub activation_mode: String,
     #[serde(default)]
     pub mute_output_while_recording: bool,
+    /// Never leave a transcript on the clipboard, even when nothing focused
+    /// takes text.
+    #[serde(default)]
+    pub preserve_clipboard: bool,
 }
 
 fn default_hotkey() -> String {
     crate::hotkey::DEFAULT_KEY.to_string()
+}
+
+fn default_trigger() -> String {
+    crate::hotkey::Trigger::Hold.id().to_string()
 }
 
 /// `INLAY_CLIENT_DATA_DIR` isolates development runs, as on the Mac client.
@@ -49,7 +61,9 @@ impl Config {
             device_name: env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows PC".into()),
             microphone: None,
             hotkey: default_hotkey(),
+            activation_mode: default_trigger(),
             mute_output_while_recording: false,
+            preserve_clipboard: false,
         };
         match fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {

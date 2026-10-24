@@ -43,6 +43,7 @@ pub fn build(page: &mut Builder, context: &Context) {
 /// The dictation key as a key cap, and how to use it.
 fn hero(page: &mut Builder, context: &Context) {
     let key = hotkey::key(&context.settings.config.hotkey);
+    let trigger = hotkey::Trigger::from_id(&context.settings.config.activation_mode);
     let area = page.band(px(76));
     let width = (theme::text_width(key.label, Font::Strong) / 2 + px(36)).max(px(68));
     let cap = RECT {
@@ -57,7 +58,7 @@ fn hero(page: &mut Builder, context: &Context) {
         pressed: context.recording && !context.testing,
     });
     page.text(
-        "Hold to dictate.",
+        &format!("{} to dictate.", trigger.verb()),
         RECT {
             left: cap.right + px(24),
             top: cap.top,
@@ -104,12 +105,16 @@ fn transcript(page: &mut Builder, context: &Context) {
     if busy {
         let (title, detail) = if context.recording {
             let key = hotkey::key(&context.settings.config.hotkey).label;
+            let trigger = hotkey::Trigger::from_id(&context.settings.config.activation_mode);
             (
                 "Listening…",
                 if context.testing {
                     "Speak, then select Finish dictation. Nothing will be pasted.".to_string()
                 } else {
-                    format!("Speak, then release {key}.")
+                    match trigger {
+                        hotkey::Trigger::Hold => format!("Speak, then release {key}."),
+                        _ => format!("Speak, then {} {key}.", trigger.verb().to_lowercase()),
+                    }
                 },
             )
         } else {
