@@ -19,6 +19,7 @@ use crate::controller::Event;
 use crate::icons::Look as TrayLook;
 use crate::menu::{self, Anchor, Entry};
 use crate::microphones::Input;
+use crate::privacy;
 use crate::theme::{self, Font, px, rect};
 use crate::win::{from_wide, wide};
 use crate::{audio, config, hotkey, startup, tray};
@@ -121,6 +122,9 @@ pub struct Context {
     pub default_input: Option<Input>,
     pub launch: bool,
     pub message: Option<Message>,
+    /// A shortcut check is running.
+    pub checking: bool,
+    pub check_lines: Vec<String>,
 }
 
 /// The result of the last change made on the page, when it needs saying.
@@ -168,6 +172,10 @@ const COPY: i32 = 109;
 const TEST: i32 = 110;
 const GEAR: i32 = 111;
 const MUTE: i32 = 112;
+const TRIGGER: i32 = 171;
+const SHORTCUT_CHECK: i32 = 172;
+const CLIPBOARD: i32 = 173;
+const MIC_SETTINGS: i32 = 174;
 const HISTORY: i32 = 140;
 const DEVICE: i32 = 141;
 const SOURCE: i32 = 142;
@@ -210,7 +218,7 @@ const SLOTS: i32 = 30000;
 /// Server preferences' dictionary controls, made as they are shown: `DYNAMIC + slot`.
 const DYNAMIC: i32 = 40000;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 38] = [
+const BUTTONS: [i32; 42] = [
     CHECK,
     COPY,
     TEST,
@@ -230,8 +238,12 @@ const BUTTONS: [i32; 38] = [
     MICROPHONE,
     CONNECT,
     HOTKEY,
+    TRIGGER,
+    SHORTCUT_CHECK,
     LAUNCH,
     MUTE,
+    CLIPBOARD,
+    MIC_SETTINGS,
     SAVE_SHARED,
     DISCARD,
     RELOAD,
@@ -256,6 +268,7 @@ const PICK_PROFILE: usize = 1400;
 /// Rename list, then Delete list.
 const PICK_LIST: usize = 1800;
 const PICK_HOTKEY: usize = 2000;
+const PICK_TRIGGER: usize = 2500;
 const PICK_DEVICE: usize = 3000;
 const PICK_SOURCE: usize = 4000;
 const PICK_LANGUAGE: usize = 5000;
@@ -576,6 +589,8 @@ fn context() -> Context {
         default_input: None,
         launch: false,
         message: None,
+        checking: status.checking.is_some(),
+        check_lines: status.check_lines.clone(),
     });
     let state = state();
     context.inputs = state.inputs.clone();
@@ -979,6 +994,18 @@ fn open_choice(window: HWND, id: i32) {
             PICK_SOURCE
         };
         (labels, selected, base)
+    } else if id == TRIGGER {
+        let current = hotkey::Trigger::from_id(&app::shared().settings().config.activation_mode);
+        (
+            hotkey::TRIGGERS
+                .iter()
+                .map(|trigger| trigger.label().to_string())
+                .collect(),
+            hotkey::TRIGGERS
+                .iter()
+                .position(|trigger| *trigger == current),
+            PICK_TRIGGER,
+        )
     } else {
         let current = app::shared().settings().config.hotkey;
         (
@@ -1040,15 +1067,27 @@ fn pick(window: HWND, id: usize) {
         unsafe { SetFocus(GetDlgItem(window, field)) };
         return;
     }
-    let key = hotkey::KEYS.get(id - PICK_HOTKEY);
-    let result = key.map_or(Ok(()), |key| {
-        app::shared().change_config(|config| config.hotkey = key.id.into())
-    });
+    let app = app::shared();
+    let (result, field) = if id >= PICK_TRIGGER {
+        let trigger = hotkey::TRIGGERS.get(id - PICK_TRIGGER);
+        let result = trigger.map_or(Ok(()), |trigger| {
+            app.change_config(|config| config.activation_mode = trigger.id().into())
+        });
+        (result, TRIGGER)
+    } else {
+        let key = hotkey::KEYS.get(id - PICK_HOTKEY);
+        let result = key.map_or(Ok(()), |key| {
+            app.change_config(|config| config.hotkey = key.id.into())
+        });
+        (result, HOTKEY)
+    };
     if result.is_ok() {
         log!("settings: saved a change on this PC");
+        // A check names the key and trigger it started with.
+        let _ = app.events.send(Event::Check(false));
     }
     say(result.err().map(|text| Message { text, error: true }));
-    unsafe { SetFocus(GetDlgItem(window, HOTKEY)) };
+    unsafe { SetFocus(GetDlgItem(window, field)) };
     relayout(window);
 }
 
@@ -1090,6 +1129,13 @@ fn toggle_mute() {
     say(result.err().map(|text| Message { text, error: true }));
 }
 
+fn toggle_clipboard() {
+    let result = app::shared().change_config(|config| {
+        config.preserve_clipboard = !config.preserve_clipboard;
+    });
+    say(result.err().map(|text| Message { text, error: true }));
+}
+
 fn toggle_launch() {
     let enabled = !state().launch;
     match startup::set(enabled) {
@@ -1113,7 +1159,8 @@ fn command(window: HWND, id: i32) {
         GEAR => return show_page(window, Page::ThisPc),
         HISTORY => return show_page(window, Page::History),
         CONNECT => return connect(window),
-        MICROPHONE | HOTKEY | DEVICE | SOURCE | LANGUAGE | RETENTION | PROFILE | LIST_OPTIONS => {
+        MICROPHONE | HOTKEY | TRIGGER | DEVICE | SOURCE | LANGUAGE | RETENTION | PROFILE
+        | LIST_OPTIONS => {
             return open_choice(window, id);
         }
         USE_LIST => microphone::use_list(),
@@ -1171,6 +1218,14 @@ fn command(window: HWND, id: i32) {
         _ if id >= ROW => history::select(window, (id - ROW) as usize),
         LAUNCH => toggle_launch(),
         MUTE => toggle_mute(),
+        CLIPBOARD => toggle_clipboard(),
+        SHORTCUT_CHECK => {
+            let checking = app.status(|status| status.checking.is_some());
+            let _ = app.events.send(Event::Check(!checking));
+        }
+        MIC_SETTINGS => say(privacy::open_settings()
+            .err()
+            .map(|text| Message { text, error: true })),
         _ if (NAV..NAV + PAGES.len() as i32).contains(&id) => {
             return show_page(window, PAGES[(id - NAV) as usize]);
         }
@@ -1319,6 +1374,13 @@ unsafe extern "system" fn window_proc(
                 _ => {}
             }
             0
+        }
+        // Back from Settings: show the microphone switches as they are now.
+        WM_ACTIVATE => {
+            if wparam & 0xFFFF != WA_INACTIVE as usize && state().page == Page::ThisPc {
+                relayout(window);
+            }
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_DESTROY => {
             WINDOW.store(null_mut(), Ordering::SeqCst);

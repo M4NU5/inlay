@@ -1,12 +1,13 @@
-//! Hold-to-talk detection with a low-level keyboard hook (`WH_KEYBOARD_LL`).
+//! Dictation key detection with a low-level keyboard hook (`WH_KEYBOARD_LL`).
 //! The hook only observes. It never swallows or rewrites a key, so the chosen
 //! key keeps working in other apps. It forwards edges to the controller, which
-//! applies the acceptance delay and the chord rule.
+//! applies the trigger, the acceptance delay and the chord rule.
 
+use crate::config::Config;
 use crate::controller::Event;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -119,6 +120,53 @@ pub fn key(id: &str) -> &'static Key {
     KEYS.iter().find(|key| key.id == id).unwrap_or(&KEYS[0])
 }
 
+/// How the dictation key starts and stops a take, as on the Mac.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Trigger {
+    Hold,
+    /// Two taps start recording, and two more stop it.
+    DoubleTap,
+    /// One tap starts recording, and the next stops it.
+    Tap,
+}
+
+pub const TRIGGERS: [Trigger; 3] = [Trigger::Hold, Trigger::DoubleTap, Trigger::Tap];
+
+impl Trigger {
+    /// The Mac's token in the config file.
+    pub fn id(self) -> &'static str {
+        match self {
+            Trigger::Hold => "hold",
+            Trigger::DoubleTap => "doubleTap",
+            Trigger::Tap => "tapToggle",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Trigger::Hold => "Hold to talk",
+            Trigger::DoubleTap => "Double tap to toggle",
+            Trigger::Tap => "Tap to start and stop",
+        }
+    }
+
+    /// What to do with the key, as in "Hold Right Ctrl to talk".
+    pub fn verb(self) -> &'static str {
+        match self {
+            Trigger::Hold => "Hold",
+            Trigger::DoubleTap => "Double tap",
+            Trigger::Tap => "Tap",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Trigger {
+        TRIGGERS
+            .into_iter()
+            .find(|trigger| trigger.id() == id)
+            .unwrap_or(Trigger::Hold)
+    }
+}
+
 /// Tags keystrokes Inlay injects, so the hook ignores its own paste chord.
 pub const INJECTED_MARKER: usize = 0x494E_4C41;
 
@@ -131,14 +179,26 @@ pub enum Edge {
 }
 
 static VK: AtomicU16 = AtomicU16::new(VK_RCONTROL);
+/// The index in `TRIGGERS` of the current trigger.
+static TRIGGER: AtomicU8 = AtomicU8::new(0);
 static HELD: AtomicBool = AtomicBool::new(false);
 /// Which keys the hook has seen go down and not yet come up.
 static DOWN: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
 static SINK: OnceLock<Sender<Event>> = OnceLock::new();
 
-pub fn set_key(vk: VIRTUAL_KEY) {
-    VK.store(vk, Ordering::SeqCst);
-    HELD.store(false, Ordering::SeqCst);
+/// Listens for the config's dictation key and trigger.
+pub fn apply(config: &Config) {
+    let vk = key(&config.hotkey).vk;
+    if VK.swap(vk, Ordering::SeqCst) != vk {
+        HELD.store(false, Ordering::SeqCst);
+    }
+    let trigger = Trigger::from_id(&config.activation_mode);
+    let index = TRIGGERS.iter().position(|each| *each == trigger);
+    TRIGGER.store(index.unwrap_or(0) as u8, Ordering::SeqCst);
+}
+
+pub fn current_trigger() -> Trigger {
+    TRIGGERS[usize::from(TRIGGER.load(Ordering::SeqCst))]
 }
 
 pub fn current_key() -> VIRTUAL_KEY {

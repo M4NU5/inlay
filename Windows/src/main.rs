@@ -17,6 +17,7 @@ mod microphones;
 mod mute;
 mod overlay;
 mod paste;
+mod privacy;
 mod settings;
 mod startup;
 mod take;
@@ -72,7 +73,7 @@ fn main() -> ExitCode {
     let first_run = !directory.join("config.json").exists();
     let config = Config::load();
     let token = credentials::read(&config.endpoint);
-    hotkey::set_key(hotkey::key(&config.hotkey).vk);
+    hotkey::apply(&config);
     let (events, inbox) = mpsc::channel();
     let (wake, woken) = mpsc::channel();
     let app = Arc::new(App::new(Settings { config, token }, events.clone(), wake));
@@ -109,7 +110,7 @@ fn main() -> ExitCode {
 /// It is a manual check for paste problems in a particular app.
 fn paste_command(text: &str) -> ExitCode {
     thread::sleep(Duration::from_secs(2));
-    match paste::paste(text, |_| {}) {
+    match paste::paste(text, Config::load().preserve_clipboard, |_| {}) {
         Ok(paste::Delivered::Pasted) => {
             log!("--paste: sent");
             ExitCode::SUCCESS
