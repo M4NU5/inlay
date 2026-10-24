@@ -16,6 +16,7 @@ mod menu;
 mod mute;
 mod overlay;
 mod paste;
+mod privacy;
 mod settings;
 mod startup;
 mod take;

@@ -18,6 +18,7 @@ use crate::app::{self, Dictation, Server, Settings};
 use crate::controller::Event;
 use crate::icons::Look as TrayLook;
 use crate::menu::{self, Anchor, Entry};
+use crate::privacy;
 use crate::theme::{self, Font, px, rect};
 use crate::win::{from_wide, wide};
 use crate::{audio, config, hotkey, startup, tray};
@@ -170,6 +171,7 @@ const TEST: i32 = 110;
 const GEAR: i32 = 111;
 const MUTE: i32 = 112;
 const CLIPBOARD: i32 = 173;
+const MIC_SETTINGS: i32 = 174;
 const HISTORY: i32 = 140;
 const DEVICE: i32 = 141;
 const SOURCE: i32 = 142;
@@ -202,7 +204,7 @@ const NAV: i32 = 120;
 /// Server preferences' dictionary controls, made as they are shown: `DYNAMIC + slot`.
 const DYNAMIC: i32 = 40000;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 33] = [
+const BUTTONS: [i32; 34] = [
     CHECK,
     COPY,
     TEST,
@@ -225,6 +227,7 @@ const BUTTONS: [i32; 33] = [
     LAUNCH,
     MUTE,
     CLIPBOARD,
+    MIC_SETTINGS,
     SAVE_SHARED,
     DISCARD,
     RELOAD,
@@ -1140,6 +1143,9 @@ fn command(window: HWND, id: i32) {
         LAUNCH => toggle_launch(),
         MUTE => toggle_mute(),
         CLIPBOARD => toggle_clipboard(),
+        MIC_SETTINGS => say(privacy::open_settings()
+            .err()
+            .map(|text| Message { text, error: true })),
         _ if (NAV..NAV + PAGES.len() as i32).contains(&id) => {
             return show_page(window, PAGES[(id - NAV) as usize]);
         }
@@ -1277,6 +1283,13 @@ unsafe extern "system" fn window_proc(
                 _ => {}
             }
             0
+        }
+        // Back from Settings: show the microphone switches as they are now.
+        WM_ACTIVATE => {
+            if wparam & 0xFFFF != WA_INACTIVE as usize && state().page == Page::ThisPc {
+                relayout(window);
+            }
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_DESTROY => {
             WINDOW.store(null_mut(), Ordering::SeqCst);

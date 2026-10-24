@@ -2,10 +2,11 @@
 
 use super::layout::{Builder, Control, Row};
 use super::{
-    CLIPBOARD, CONNECT, Context, ENDPOINT, HOTKEY, LAUNCH, MUTE, NAME, TOKEN, server_line,
+    CLIPBOARD, CONNECT, Context, ENDPOINT, HOTKEY, LAUNCH, MIC_SETTINGS, MUTE, NAME, TOKEN,
+    server_line,
 };
 use crate::app::Server;
-use crate::{config, hotkey, theme};
+use crate::{config, hotkey, privacy, theme};
 
 pub fn build(page: &mut Builder, context: &Context) {
     page.title("This PC");
@@ -57,6 +58,29 @@ pub fn build(page: &mut Builder, context: &Context) {
         Row::new("Start Inlay when I sign in")
             .control(LAUNCH, Control::Switch { on: context.launch }),
     ]);
+    page.gap(32);
+
+    page.section("Permissions");
+    let blocked = privacy::microphone_blocked();
+    let (dot, access) = match blocked {
+        None => (theme::GREEN, "Allowed"),
+        Some(_) => (theme::ORANGE, "Blocked"),
+    };
+    page.card(vec![
+        Row::new("Microphone")
+            .dot(dot)
+            .detail("Capture audio while dictating.")
+            .value(access)
+            .control(MIC_SETTINGS, Control::button("Open settings")),
+    ]);
+    if let Some(switch) = blocked {
+        page.note(
+            &format!(
+                "Windows is keeping Inlay from the microphone, so it can't hear you. In Settings, turn on “{switch}”."
+            ),
+            theme::ORANGE,
+        );
+    }
     page.gap(32);
 
     let folder = config::data_dir().display().to_string();

@@ -57,6 +57,7 @@ The machine running these checks usually belongs to someone who is using it.
 | `mute.rs`                                   | Mutes the speakers while recording, with a crash record so a killed run can't leave them muted.         |
 | `hotkey.rs`                                 | `WH_KEYBOARD_LL` hook and the hold key list.                                                            |
 | `paste.rs`                                  | Clipboard snapshot and restore, modifier release, Ctrl+V or Ctrl+Shift+V.                               |
+| `privacy.rs`                                | Reads the Windows microphone privacy switches; opens their Settings page.                               |
 | `app.rs`                                    | Shared state, server health monitor, paste ordering.                                                    |
 | `tray.rs`                                   | Tray icon, tooltip, menu, notifications.                                                                |
 | `settings/`                                 | The main window: sidebar, scrolling, controls (`mod.rs`), page layout (`layout.rs`), one file per page. |
