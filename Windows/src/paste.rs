@@ -75,17 +75,28 @@ pub fn paste(
     never_copy: bool,
     sent: impl FnOnce(Delivered),
 ) -> Result<Delivered, String> {
+    // With `never_copy`, the field is found before staging, so a transcript
+    // with nowhere to go never reaches the clipboard.
+    let found = never_copy.then(|| unsafe { GetForegroundWindow() });
+    if let Some(target) = found
+        && !accepts_text(target)
+    {
+        return Err(nowhere());
+    }
     let saved = snapshot()?;
     write_text(text, true)?;
     let staged = unsafe { GetClipboardSequenceNumber() };
     // Checked after the clipboard work, which can wait on other apps. The
     // check itself can take a moment, so the window must still be in front.
     let target = unsafe { GetForegroundWindow() };
-    if !accepts_text(target) || unsafe { GetForegroundWindow() } != target {
+    let focused = match found {
+        Some(found) => target == found,
+        None => accepts_text(target) && unsafe { GetForegroundWindow() } == target,
+    };
+    if !focused {
         if never_copy {
             restore(&saved, staged);
-            log!("paste: no text field has focus, and transcripts stay off the clipboard");
-            return Err("No text field had focus. Your words are ready to copy.".into());
+            return Err(nowhere());
         }
         copy(text)?;
         log!("paste: no text field has focus, so the transcript was copied");
@@ -106,6 +117,11 @@ pub fn paste(
     thread::sleep(RESTORE_DELAY);
     restore(&saved, staged);
     Ok(Delivered::Pasted)
+}
+
+fn nowhere() -> String {
+    log!("paste: no text field has focus, and transcripts stay off the clipboard");
+    "No text field had focus. Your words are ready to copy.".into()
 }
 
 /// Leaves `text` on the clipboard, where clipboard history may keep it.

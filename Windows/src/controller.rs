@@ -97,6 +97,9 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
     // When the running shortcut check ends.
     let mut check: Option<Instant> = None;
     loop {
+        // The watchdog made up this release. It ends a hold, but isn't a tap:
+        // the key may have changed under a press.
+        let mut guessed = false;
         let timeout = match &phase {
             Phase::Pending(since) => {
                 Some(ACCEPT_DELAY.saturating_sub(since.elapsed()).min(WATCHDOG))
@@ -145,6 +148,7 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
                         app.check_line("Key-up not seen; treating the key as released.");
                     }
                     hotkey::forget_hold();
+                    guessed = true;
                     Some(Event::Hotkey(Edge::Released))
                 }
             }
@@ -168,21 +172,26 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
                         .to_lowercase(),
                 ));
                 phase = phase.fresh();
+                last_tap = None;
                 None
             }
             Some(Event::Check(_)) => {
                 if check.take().is_some() {
                     app.check_ended();
                     phase = phase.fresh();
+                    last_tap = None;
                 }
                 None
             }
             event => event,
         };
-        if check.is_some_and(|end| Instant::now() >= end) {
+        // A microphone test ends the check first, as the check promises no audio.
+        let expired = check.is_some_and(|end| Instant::now() >= end);
+        if check.is_some() && (expired || matches!(event, Some(Event::Test))) {
             check = None;
             app.check_ended();
             phase = phase.fresh();
+            last_tap = None;
         }
         let checking = check.is_some();
         let say = |text: &str| {
@@ -222,7 +231,9 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
             }
             (Phase::Tapping, Some(Event::Hotkey(Edge::Released))) => {
                 say("Key up.");
-                if !toggles(Instant::now()) {
+                if guessed {
+                    Phase::Idle
+                } else if !toggles(Instant::now()) {
                     say("Tap ignored: double tap to toggle recording.");
                     Phase::Idle
                 } else if checking {
@@ -245,7 +256,7 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
                 Phase::Latched(take, Key::Up)
             }
             (Phase::Latched(take, Key::Down), Some(Event::Hotkey(Edge::Released))) => {
-                if toggles(Instant::now()) {
+                if !guessed && toggles(Instant::now()) {
                     log!("hotkey: tap accepted; finishing take {}", take.id);
                     take.release();
                     Phase::Idle
