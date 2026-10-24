@@ -13,6 +13,7 @@ mod credentials;
 mod hotkey;
 mod icons;
 mod menu;
+mod microphones;
 mod mute;
 mod overlay;
 mod paste;

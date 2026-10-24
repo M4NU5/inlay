@@ -2,6 +2,7 @@
 //! delivers the device's own format, so this downmixes to mono and resamples
 //! to the 16 kHz float32 stream the server's speech model expects.
 
+use crate::microphones::Input;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, I24, Sample, SampleFormat, SizedSample};
 use std::f64::consts::PI;
@@ -30,9 +31,10 @@ pub fn level() -> f32 {
     f32::from_bits(LEVEL.load(Ordering::Relaxed))
 }
 
-pub fn input_names() -> Vec<String> {
+/// The connected inputs, by endpoint ID and name.
+pub fn inputs() -> Vec<Input> {
     match cpal::default_host().input_devices() {
-        Ok(devices) => devices.map(|device| device.to_string()).collect(),
+        Ok(devices) => devices.filter_map(|device| input(&device)).collect(),
         Err(error) => {
             log!("audio: cannot list microphones: {error}");
             Vec::new()
@@ -40,11 +42,20 @@ pub fn input_names() -> Vec<String> {
     }
 }
 
-/// The name of Windows' default input, if there is one.
-pub fn default_input_name() -> Option<String> {
-    cpal::default_host()
-        .default_input_device()
-        .map(|device| device.to_string())
+/// Windows' default input, if there is one.
+pub fn default_input() -> Option<Input> {
+    input(&cpal::default_host().default_input_device()?)
+}
+
+fn input(device: &cpal::Device) -> Option<Input> {
+    Some(Input {
+        uid: uid(device)?,
+        name: device.to_string(),
+    })
+}
+
+fn uid(device: &cpal::Device) -> Option<String> {
+    device.id().ok().map(|id| id.id().to_string())
 }
 
 pub struct Recording {
@@ -66,21 +77,34 @@ impl Recording {
     }
 }
 
-/// Opens `preferred` (or the default input) and sends converted chunks to `chunks`.
+/// Opens the first connected input of `wanted`, by endpoint ID, or else the
+/// default input, and sends converted chunks to `chunks`.
 pub fn start(
-    preferred: Option<&str>,
+    wanted: &[String],
     chunks: SyncSender<Vec<f32>>,
     notify: Notify,
 ) -> Result<Recording, String> {
     let host = cpal::default_host();
-    let chosen = preferred.and_then(|name| {
-        host.input_devices()
-            .ok()?
-            .find(|device| device.to_string() == name)
-    });
-    if let (Some(name), None) = (preferred, &chosen) {
-        log!("audio: {name} is not connected; using the default microphone");
-    }
+    let chosen = if wanted.is_empty() {
+        None
+    } else {
+        let mut connected: Vec<(String, cpal::Device)> = host
+            .input_devices()
+            .map(|devices| {
+                devices
+                    .filter_map(|device| Some((uid(&device)?, device)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let chosen = wanted
+            .iter()
+            .find_map(|uid| connected.iter().position(|(each, _)| each == uid))
+            .map(|index| connected.swap_remove(index).1);
+        if chosen.is_none() {
+            log!("audio: no preferred microphone is connected; using the default microphone");
+        }
+        chosen
+    };
     let device = chosen
         .or_else(|| host.default_input_device())
         .ok_or("No microphone is available. Connect one and try again.")?;

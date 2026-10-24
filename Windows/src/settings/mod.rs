@@ -18,6 +18,7 @@ use crate::app::{self, Dictation, Server, Settings};
 use crate::controller::Event;
 use crate::icons::Look as TrayLook;
 use crate::menu::{self, Anchor, Entry};
+use crate::microphones::Input;
 use crate::theme::{self, Font, px, rect};
 use crate::win::{from_wide, wide};
 use crate::{audio, config, hotkey, startup, tray};
@@ -115,8 +116,9 @@ pub struct Context {
     pub error: Option<String>,
     /// The latest test's transcript, or why it stopped without one.
     pub test: Option<Result<Dictation, String>>,
-    pub microphones: Vec<String>,
-    pub default_microphone: Option<String>,
+    /// Connected inputs, and Windows' default one.
+    pub inputs: Vec<Input>,
+    pub default_input: Option<Input>,
     pub launch: bool,
     pub message: Option<Message>,
 }
@@ -133,10 +135,8 @@ struct State {
     /// How far the page is scrolled, in device pixels.
     scroll: i32,
     layout: Layout,
-    microphones: Vec<String>,
-    default_microphone: Option<String>,
-    /// Behind the microphone popup's entries: `None` is the system default.
-    microphone_choices: Vec<Option<String>>,
+    inputs: Vec<Input>,
+    default_input: Option<Input>,
     launch: bool,
     message: Option<Message>,
     /// Server preferences' dictionary controls that exist, by id.
@@ -147,9 +147,8 @@ static STATE: Mutex<State> = Mutex::new(State {
     page: Page::Dictation,
     scroll: 0,
     layout: Layout::EMPTY,
-    microphones: Vec::new(),
-    default_microphone: None,
-    microphone_choices: Vec::new(),
+    inputs: Vec::new(),
+    default_input: None,
     launch: false,
     message: None,
     dynamic: Vec::new(),
@@ -194,14 +193,24 @@ const PURGE_ALL: i32 = 161;
 const ADD_LIST: i32 = 162;
 /// The cleanup instructions, a multi-line text box.
 const PROMPT: i32 = 163;
+/// A new or renamed microphone priority list's name.
+const LIST_NAME: i32 = 164;
+const PROFILE: i32 = 165;
+const USE_LIST: i32 = 166;
+const NEW_LIST: i32 = 167;
+const LIST_OPTIONS: i32 = 168;
+const NAME_CANCEL: i32 = 169;
+const NAME_SAVE: i32 = 170;
 /// History's rows, which are painted, not controls: `ROW + index`.
 const ROW: i32 = 6000;
 /// Sidebar buttons: `NAV + index`.
 const NAV: i32 = 120;
+/// Microphone priority list buttons, made as they are shown: `SLOTS + slot`.
+const SLOTS: i32 = 30000;
 /// Server preferences' dictionary controls, made as they are shown: `DYNAMIC + slot`.
 const DYNAMIC: i32 = 40000;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 32] = [
+const BUTTONS: [i32; 38] = [
     CHECK,
     COPY,
     TEST,
@@ -234,9 +243,18 @@ const BUTTONS: [i32; 32] = [
     PURGE_ORIGINAL,
     PURGE_ALL,
     ADD_LIST,
+    PROFILE,
+    USE_LIST,
+    NEW_LIST,
+    LIST_OPTIONS,
+    NAME_CANCEL,
+    NAME_SAVE,
 ];
 /// Popup list choices: `PICK_MICROPHONE + index` and `PICK_HOTKEY + index`.
 const PICK_MICROPHONE: usize = 1000;
+const PICK_PROFILE: usize = 1400;
+/// Rename list, then Delete list.
+const PICK_LIST: usize = 1800;
 const PICK_HOTKEY: usize = 2000;
 const PICK_DEVICE: usize = 3000;
 const PICK_SOURCE: usize = 4000;
@@ -409,8 +427,17 @@ pub fn open(page: Page) {
         SetWindowTheme(prompt, dark.as_ptr(), null());
         let original = SetWindowLongPtrW(prompt, GWLP_WNDPROC, prompt_proc as *const () as isize);
         PROMPT_PROC.store(original as usize, Ordering::SeqCst);
+        let name = control(
+            window,
+            "EDIT",
+            "",
+            WS_TABSTOP | ES_AUTOHSCROLL as u32,
+            LIST_NAME,
+        );
+        SendMessageW(name, EM_SETMARGINS, 3, 0);
         cue(ENDPOINT, config::DEFAULT_ENDPOINT);
         cue(TOKEN, "None");
+        cue(LIST_NAME, "Desk, travel…");
         for id in BUTTONS {
             button(window, id, "");
         }
@@ -524,11 +551,12 @@ fn fill(window: HWND) {
 }
 
 fn refresh_microphones() {
-    let microphones = audio::input_names();
-    let default_microphone = audio::default_input_name();
+    let inputs = audio::inputs();
+    let default_input = audio::default_input();
+    microphone::devices_changed(&inputs);
     let mut state = state();
-    state.microphones = microphones;
-    state.default_microphone = default_microphone;
+    state.inputs = inputs;
+    state.default_input = default_input;
 }
 
 fn context() -> Context {
@@ -544,14 +572,14 @@ fn context() -> Context {
         last: status.last.clone(),
         error: status.error.clone(),
         test: status.test.clone(),
-        microphones: Vec::new(),
-        default_microphone: None,
+        inputs: Vec::new(),
+        default_input: None,
         launch: false,
         message: None,
     });
     let state = state();
-    context.microphones = state.microphones.clone();
-    context.default_microphone = state.default_microphone.clone();
+    context.inputs = state.inputs.clone();
+    context.default_input = state.default_input.clone();
     context.launch = state.launch;
     context.message = state.message.clone();
     context
@@ -627,7 +655,7 @@ fn place_controls(window: HWND) {
         let mut after = GetDlgItem(window, NAV + PAGES.len() as i32 - 1);
         for each in &placed {
             let mut control = GetDlgItem(window, each.id);
-            if control.is_null() && each.id >= DYNAMIC {
+            if control.is_null() && each.id >= SLOTS {
                 control = make_dynamic(window, each);
             }
             let area = each.area;
@@ -663,7 +691,7 @@ fn place_controls(window: HWND) {
         for id in gone {
             DestroyWindow(GetDlgItem(window, id));
         }
-        for id in EDITS.into_iter().chain(BUTTONS).chain([PROMPT]) {
+        for id in EDITS.into_iter().chain(BUTTONS).chain([PROMPT, LIST_NAME]) {
             if !placed.iter().any(|each| each.id == id) {
                 ShowWindow(GetDlgItem(window, id), SW_HIDE);
             }
@@ -779,6 +807,7 @@ fn show_page(window: HWND, page: Page) {
         state.message = None;
     }
     if page == Page::Microphone {
+        microphone::cancel_naming();
         refresh_microphones();
     }
     if page == Page::History {
@@ -926,29 +955,15 @@ fn open_choice(window: HWND, id: i32) {
     if menu::recently_closed() {
         return;
     }
-    let (labels, selected, base) = if id == MICROPHONE {
-        refresh_microphones();
-        let saved = app::shared().settings().config.microphone;
-        let mut state = state();
-        let mut choices: Vec<Option<String>> = vec![None];
-        choices.extend(state.microphones.iter().cloned().map(Some));
-        if let Some(saved) = &saved
-            && !state.microphones.contains(saved)
-        {
-            choices.push(Some(saved.clone()));
+    if matches!(id, MICROPHONE | PROFILE | LIST_OPTIONS) {
+        if id == MICROPHONE {
+            refresh_microphones();
         }
-        let labels: Vec<String> = choices
-            .iter()
-            .map(|choice| match choice {
-                None => "System default".to_string(),
-                Some(name) if state.microphones.contains(name) => name.clone(),
-                Some(name) => format!("{name} (disconnected)"),
-            })
-            .collect();
-        let selected = choices.iter().position(|choice| *choice == saved);
-        state.microphone_choices = choices;
-        (labels, selected, PICK_MICROPHONE)
-    } else if id == LANGUAGE || id == RETENTION {
+        let entries = microphone::choices(id, &context());
+        let width = if id == MICROPHONE { 320 } else { 200 };
+        return show_choice(window, id, entries, width);
+    }
+    let (labels, selected, base) = if id == LANGUAGE || id == RETENTION {
         let (labels, selected) = server::choices(id);
         let base = if id == LANGUAGE {
             PICK_LANGUAGE
@@ -985,9 +1000,14 @@ fn open_choice(window: HWND, id: i32) {
             checked: Some(index) == selected,
         })
         .collect();
+    show_choice(window, id, entries, 200);
+}
+
+/// Shows a popup list under control `id`, at least `width` logical pixels wide.
+fn show_choice(window: HWND, id: i32, entries: Vec<Entry>, width: i32) {
     let mut field = RECT::default();
     unsafe { GetWindowRect(GetDlgItem(window, id), &mut field) };
-    let width = (field.right - field.left).max(px(if id == MICROPHONE { 320 } else { 200 }));
+    let width = (field.right - field.left).max(px(width));
     menu::show(window, None, entries, width, Anchor::Below(field));
 }
 
@@ -1014,28 +1034,21 @@ fn pick(window: HWND, id: usize) {
         unsafe { SetFocus(GetDlgItem(window, field)) };
         return relayout(window);
     }
-    let app = app::shared();
-    let (result, field) = if id >= PICK_HOTKEY {
-        let key = hotkey::KEYS.get(id - PICK_HOTKEY);
-        let result = key.map_or(Ok(()), |key| {
-            app.change_config(|config| config.hotkey = key.id.into())
-        });
-        (result, HOTKEY)
-    } else {
-        let choice = state()
-            .microphone_choices
-            .get(id - PICK_MICROPHONE)
-            .cloned();
-        let result = choice.map_or(Ok(()), |choice| {
-            app.change_config(|config| config.microphone = choice)
-        });
-        (result, MICROPHONE)
-    };
+    if id < PICK_HOTKEY {
+        let field = microphone::pick(window, id);
+        relayout(window);
+        unsafe { SetFocus(GetDlgItem(window, field)) };
+        return;
+    }
+    let key = hotkey::KEYS.get(id - PICK_HOTKEY);
+    let result = key.map_or(Ok(()), |key| {
+        app::shared().change_config(|config| config.hotkey = key.id.into())
+    });
     if result.is_ok() {
         log!("settings: saved a change on this PC");
     }
     say(result.err().map(|text| Message { text, error: true }));
-    unsafe { SetFocus(GetDlgItem(window, field)) };
+    unsafe { SetFocus(GetDlgItem(window, HOTKEY)) };
     relayout(window);
 }
 
@@ -1100,8 +1113,31 @@ fn command(window: HWND, id: i32) {
         GEAR => return show_page(window, Page::ThisPc),
         HISTORY => return show_page(window, Page::History),
         CONNECT => return connect(window),
-        MICROPHONE | HOTKEY | DEVICE | SOURCE | LANGUAGE | RETENTION => {
+        MICROPHONE | HOTKEY | DEVICE | SOURCE | LANGUAGE | RETENTION | PROFILE | LIST_OPTIONS => {
             return open_choice(window, id);
+        }
+        USE_LIST => microphone::use_list(),
+        NEW_LIST => {
+            microphone::start_naming(window, None);
+            relayout(window);
+            return microphone::focus_name(window);
+        }
+        NAME_SAVE => {
+            microphone::save_name();
+            relayout(window);
+            let field = if microphone::naming() {
+                LIST_NAME
+            } else {
+                PROFILE
+            };
+            unsafe { SetFocus(GetDlgItem(window, field)) };
+            return;
+        }
+        NAME_CANCEL => {
+            microphone::cancel_naming();
+            relayout(window);
+            unsafe { SetFocus(GetDlgItem(window, PROFILE)) };
+            return;
         }
         SAVE_SHARED => server::save(window),
         DISCARD | RELOAD => server::discard(),
@@ -1116,6 +1152,11 @@ fn command(window: HWND, id: i32) {
         ADD_LIST => server::add_list(),
         _ if id >= DYNAMIC => {
             if !server::command(id) {
+                return;
+            }
+        }
+        _ if id >= SLOTS => {
+            if !microphone::command(id, &context()) {
                 return;
             }
         }
@@ -1242,6 +1283,11 @@ unsafe extern "system" fn window_proc(
                     InvalidateRect(lparam as HWND, null(), 1);
                     InvalidateRect(window, null(), 0);
                 },
+                EN_CHANGE if id == LIST_NAME => {
+                    if microphone::typed(&text(window, id)) {
+                        relayout(window);
+                    }
+                }
                 EN_CHANGE if id == PROMPT || id >= DYNAMIC => {
                     let text = text(window, id).replace("\r\n", "\n");
                     if server::edited(id, &text) {
@@ -1258,9 +1304,15 @@ unsafe extern "system" fn window_proc(
                         let focus = unsafe { GetDlgCtrlID(GetFocus()) };
                         if EDITS.contains(&focus) {
                             command(window, CONNECT);
+                        } else if focus == LIST_NAME {
+                            command(window, NAME_SAVE);
                         } else {
                             command(window, focus);
                         }
+                    }
+                    // Esc leaves the name box without naming the list.
+                    IDCANCEL if unsafe { GetDlgCtrlID(GetFocus()) } == LIST_NAME => {
+                        command(window, NAME_CANCEL);
                     }
                     id => command(window, id),
                 },
