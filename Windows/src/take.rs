@@ -427,7 +427,8 @@ fn deliver(app: &App, record: &Generation, seconds: f64) -> (&'static str, Strin
         record.insertion_text.chars().count()
     );
     // The tick starts as the keystroke goes out, so it lands with the text.
-    match paste::paste(&record.insertion_text, |delivered| {
+    let never_copy = app.settings().config.preserve_clipboard;
+    match paste::paste(&record.insertion_text, never_copy, |delivered| {
         app.set_delivered(delivered)
     }) {
         Ok(paste::Delivered::Pasted) => {

@@ -169,6 +169,7 @@ const COPY: i32 = 109;
 const TEST: i32 = 110;
 const GEAR: i32 = 111;
 const MUTE: i32 = 112;
+const CLIPBOARD: i32 = 173;
 const HISTORY: i32 = 140;
 const DEVICE: i32 = 141;
 const SOURCE: i32 = 142;
@@ -201,7 +202,7 @@ const NAV: i32 = 120;
 /// Server preferences' dictionary controls, made as they are shown: `DYNAMIC + slot`.
 const DYNAMIC: i32 = 40000;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 32] = [
+const BUTTONS: [i32; 33] = [
     CHECK,
     COPY,
     TEST,
@@ -223,6 +224,7 @@ const BUTTONS: [i32; 32] = [
     HOTKEY,
     LAUNCH,
     MUTE,
+    CLIPBOARD,
     SAVE_SHARED,
     DISCARD,
     RELOAD,
@@ -1077,6 +1079,13 @@ fn toggle_mute() {
     say(result.err().map(|text| Message { text, error: true }));
 }
 
+fn toggle_clipboard() {
+    let result = app::shared().change_config(|config| {
+        config.preserve_clipboard = !config.preserve_clipboard;
+    });
+    say(result.err().map(|text| Message { text, error: true }));
+}
+
 fn toggle_launch() {
     let enabled = !state().launch;
     match startup::set(enabled) {
@@ -1130,6 +1139,7 @@ fn command(window: HWND, id: i32) {
         _ if id >= ROW => history::select(window, (id - ROW) as usize),
         LAUNCH => toggle_launch(),
         MUTE => toggle_mute(),
+        CLIPBOARD => toggle_clipboard(),
         _ if (NAV..NAV + PAGES.len() as i32).contains(&id) => {
             return show_page(window, PAGES[(id - NAV) as usize]);
         }

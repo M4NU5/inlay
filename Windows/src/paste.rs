@@ -3,7 +3,7 @@
 //! that the text landed, so nothing here claims it did. Windows also blocks
 //! input into elevated (administrator) windows from this unelevated app.
 //! When nothing focused takes text, the transcript is copied and left on the
-//! clipboard instead.
+//! clipboard instead, unless This PC says never to leave it there.
 
 use crate::hotkey::{self, INJECTED_MARKER};
 use crate::win::{from_wide, wide};
@@ -68,8 +68,13 @@ pub enum Delivered {
 }
 
 /// Calls `sent` once the transcript has gone out: after the paste keystroke
-/// and before the clipboard is restored, or once it is copied.
-pub fn paste(text: &str, sent: impl FnOnce(Delivered)) -> Result<Delivered, String> {
+/// and before the clipboard is restored, or once it is copied. With
+/// `never_copy`, a transcript with nowhere to go is not copied either.
+pub fn paste(
+    text: &str,
+    never_copy: bool,
+    sent: impl FnOnce(Delivered),
+) -> Result<Delivered, String> {
     let saved = snapshot()?;
     write_text(text, true)?;
     let staged = unsafe { GetClipboardSequenceNumber() };
@@ -77,6 +82,11 @@ pub fn paste(text: &str, sent: impl FnOnce(Delivered)) -> Result<Delivered, Stri
     // check itself can take a moment, so the window must still be in front.
     let target = unsafe { GetForegroundWindow() };
     if !accepts_text(target) || unsafe { GetForegroundWindow() } != target {
+        if never_copy {
+            restore(&saved, staged);
+            log!("paste: no text field has focus, and transcripts stay off the clipboard");
+            return Err("No text field had focus. Your words are ready to copy.".into());
+        }
         copy(text)?;
         log!("paste: no text field has focus, so the transcript was copied");
         sent(Delivered::Copied);

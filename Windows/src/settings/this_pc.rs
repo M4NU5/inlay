@@ -1,7 +1,9 @@
 //! The This PC page: the server connection, this PC's settings, and the version.
 
 use super::layout::{Builder, Control, Row};
-use super::{CONNECT, Context, ENDPOINT, HOTKEY, LAUNCH, MUTE, NAME, TOKEN, server_line};
+use super::{
+    CLIPBOARD, CONNECT, Context, ENDPOINT, HOTKEY, LAUNCH, MUTE, NAME, TOKEN, server_line,
+};
 use crate::app::Server;
 use crate::{config, hotkey, theme};
 
@@ -44,6 +46,12 @@ pub fn build(page: &mut Builder, context: &Context) {
             MUTE,
             Control::Switch {
                 on: context.settings.config.mute_output_while_recording,
+            },
+        ),
+        Row::new("Never leave transcripts on the clipboard").control(
+            CLIPBOARD,
+            Control::Switch {
+                on: context.settings.config.preserve_clipboard,
             },
         ),
         Row::new("Start Inlay when I sign in")

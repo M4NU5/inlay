@@ -23,6 +23,10 @@ pub struct Config {
     pub hotkey: String,
     #[serde(default)]
     pub mute_output_while_recording: bool,
+    /// Never leave a transcript on the clipboard, even when nothing focused
+    /// takes text.
+    #[serde(default)]
+    pub preserve_clipboard: bool,
 }
 
 fn default_hotkey() -> String {
@@ -50,6 +54,7 @@ impl Config {
             microphone: None,
             hotkey: default_hotkey(),
             mute_output_while_recording: false,
+            preserve_clipboard: false,
         };
         match fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
