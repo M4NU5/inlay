@@ -104,8 +104,12 @@ struct Page {
     by_id: Vec<Slot>,
     /// The text boxes no longer show the draft: the window remakes them.
     resync: bool,
-    /// The server was ready at the last refresh.
-    ready: bool,
+    /// The server's state when the page last loaded.
+    server: Option<Server>,
+    /// The last load reached the server with this PC's credential. Saving
+    /// and deleting audio need only that, as on the Mac, not the models: a
+    /// server short of disk space isn't ready, and deleting audio frees it.
+    reachable: bool,
 }
 
 static PAGE: LazyLock<Mutex<Page>> = LazyLock::new(Mutex::default);
@@ -120,20 +124,22 @@ fn post(window: usize) {
 
 /// The page was opened: load the newest preferences, models and storage.
 pub fn opened(window: HWND) {
-    page().ready = app::shared().status(|status| status.server == Server::Ready);
+    page().server = Some(app::shared().status(|status| status.server.clone()));
     load(window);
 }
 
-/// Loads again when the server comes back.
+/// Loads again when the server's state changes, to learn whether it still
+/// answers.
 pub fn catch_up(window: HWND, server: &Server) {
-    let ready = *server == Server::Ready;
-    let back = {
+    let changed = {
         let mut page = page();
-        let back = ready && !page.ready;
-        page.ready = ready;
-        back
+        let changed = *server != Server::Checking && page.server.as_ref() != Some(server);
+        if changed {
+            page.server = Some(server.clone());
+        }
+        changed
     };
-    if back {
+    if changed {
         load(window);
     }
 }
@@ -185,6 +191,10 @@ fn load(window: HWND) {
                 return;
             }
             page.loading = false;
+            page.reachable = preferences.is_ok()
+                && health
+                    .as_ref()
+                    .is_some_and(|health| health.api_version == api::API_VERSION);
             if health.is_some() {
                 page.health = health;
             }
@@ -517,12 +527,11 @@ pub fn save(window: HWND) {
     let settings = app::shared().settings();
     let (shared, session) = {
         let mut page = page();
-        let ready = app::shared().status(|status| status.server == Server::Ready);
         let (Some(base), Some(draft)) = (&page.base, &page.draft) else {
             return;
         };
         if page.saving
-            || !ready
+            || !page.reachable
             || page.endpoint != settings.config.endpoint
             || !dirty(&page)
             || changed_remotely(&page)
@@ -776,8 +785,7 @@ pub fn build(builder: &mut Builder, context: &Context) {
     catch_up_draft(&mut page);
     builder.title("Server preferences");
 
-    let ready = context.server == Server::Ready;
-    let available = ready && page.latest.is_some();
+    let available = page.reachable && page.latest.is_some();
     let dirty = dirty(&page);
     let remote = changed_remotely(&page);
     let invalid = page.draft.as_ref().and_then(validation);
@@ -795,10 +803,10 @@ pub fn build(builder: &mut Builder, context: &Context) {
         actions.push((RELOAD, Control::button("Reload")));
     }
     builder.actions(actions);
-    let message = if !ready {
-        Some("Cannot load shared preferences while the server is unavailable.".to_string())
-    } else if page.latest.is_none() && page.loading {
+    let message = if page.latest.is_none() && page.loading {
         Some("Loading shared preferences…".to_string())
+    } else if !page.reachable {
+        Some("Cannot load shared preferences while the server is unavailable.".to_string())
     } else if remote {
         Some("Shared preferences changed on another device. Reload to continue.".to_string())
     } else {
@@ -813,7 +821,7 @@ pub fn build(builder: &mut Builder, context: &Context) {
         return;
     };
 
-    if ready
+    if page.reachable
         && let Some(health) = &page.health
         && let (Some(speech), Some(proofreading)) = (&health.speech, &health.proofreading)
     {
