@@ -170,7 +170,7 @@ fn record(
             });
         })
     };
-    let recording = match audio::start(settings.config.microphone.as_deref(), chunks, notify) {
+    let recording = match audio::start(&settings.config.microphones.wanted(), chunks, notify) {
         Ok(recording) => recording,
         Err(message) => {
             cancel_quietly(&api, &generation);

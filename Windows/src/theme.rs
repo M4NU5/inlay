@@ -694,6 +694,39 @@ impl Canvas {
         );
     }
 
+    /// A plus sign, for adding.
+    pub fn plus(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        self.lines(&[at(12.0, 5.0), at(12.0, 19.0)], rgb, 1.8 * unit);
+        self.lines(&[at(5.0, 12.0), at(19.0, 12.0)], rgb, 1.8 * unit);
+    }
+
+    /// Three dots in a row, for more options.
+    pub fn ellipsis(&self, x: i32, y: i32, size: i32, rgb: u32) {
+        let unit = size as f32 / 24.0;
+        for column in [5.0, 12.0, 19.0] {
+            self.circle(
+                x as f32 + column * unit,
+                y as f32 + 12.0 * unit,
+                1.7 * unit,
+                rgb,
+            );
+        }
+    }
+
+    /// A chevron pointing up, or down when `down`, for moving in a list.
+    pub fn chevron(&self, x: i32, y: i32, size: i32, rgb: u32, down: bool) {
+        let unit = size as f32 / 24.0;
+        let at = |px: f32, py: f32| (x as f32 + px * unit, y as f32 + py * unit);
+        let points = if down {
+            [at(6.0, 9.0), at(12.0, 15.0), at(18.0, 9.0)]
+        } else {
+            [at(6.0, 15.0), at(12.0, 9.0), at(18.0, 15.0)]
+        };
+        self.lines(&points, rgb, 1.8 * unit);
+    }
+
     /// A chevron pointing right, or down when `open`, for a list that expands.
     pub fn disclosure(&self, x: i32, y: i32, size: i32, rgb: u32, open: bool) {
         let unit = size as f32 / 24.0;

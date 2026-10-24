@@ -1,6 +1,7 @@
 //! Device settings in `%APPDATA%\Inlay\config.json`. The server token lives in
 //! Windows Credential Manager (see `credentials.rs`), never in this file.
 
+use crate::microphones::{Microphones, Selection};
 use serde::{Deserialize, Serialize};
 use std::net::Ipv6Addr;
 use std::path::PathBuf;
@@ -16,9 +17,13 @@ pub struct Config {
     #[serde(rename = "deviceID")]
     pub device_id: String,
     pub device_name: String,
-    /// The microphone's Windows name. `None` follows the system default input.
+    /// Priority lists and which microphone records, as on the Mac.
     #[serde(default)]
-    pub microphone: Option<String>,
+    pub microphones: Microphones,
+    /// The one microphone, by its Windows name, from before priority lists.
+    /// Read once to carry it over, and never written.
+    #[serde(default, skip_serializing)]
+    microphone: Option<String>,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
     /// How the key starts and stops a take: the Mac's `hold`, `doubleTap` or
@@ -59,6 +64,7 @@ impl Config {
             endpoint: DEFAULT_ENDPOINT.into(),
             device_id: uuid::Uuid::new_v4().to_string(),
             device_name: env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows PC".into()),
+            microphones: Microphones::default(),
             microphone: None,
             hotkey: default_hotkey(),
             activation_mode: default_trigger(),
@@ -66,13 +72,20 @@ impl Config {
             preserve_clipboard: false,
         };
         match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-                log!(
-                    "config: {} is invalid ({error}); using defaults without saving",
-                    path.display()
-                );
-                defaults()
-            }),
+            Ok(bytes) => match serde_json::from_slice::<Config>(&bytes) {
+                Ok(mut config) => {
+                    config.microphones = config.microphones.normalized();
+                    config.carry_over_microphone();
+                    config
+                }
+                Err(error) => {
+                    log!(
+                        "config: {} is invalid ({error}); using defaults without saving",
+                        path.display()
+                    );
+                    defaults()
+                }
+            },
             Err(_) => {
                 let config = defaults();
                 if let Err(error) = config.save() {
@@ -80,6 +93,25 @@ impl Config {
                 }
                 config
             }
+        }
+    }
+
+    /// Turns the microphone chosen by name before priority lists into a
+    /// fixed choice by endpoint ID. One that isn't connected now can't be
+    /// told apart, so Inlay follows the priority list instead.
+    fn carry_over_microphone(&mut self) {
+        let Some(name) = self.microphone.take() else {
+            return;
+        };
+        match crate::audio::inputs()
+            .into_iter()
+            .find(|input| input.name == name)
+        {
+            Some(device) => self.microphones.selection = Selection::Fixed { device },
+            None => log!("config: the saved microphone is not connected; using the priority list"),
+        }
+        if let Err(error) = self.save() {
+            log!("config: could not save the microphone choice: {error}");
         }
     }
 

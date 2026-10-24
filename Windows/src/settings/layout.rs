@@ -32,6 +32,10 @@ pub enum Icon {
     Star,
     StarFilled,
     Remove,
+    Add,
+    More,
+    Up,
+    Down,
 }
 
 impl Icon {
@@ -65,6 +69,10 @@ impl Icon {
             Icon::Star => canvas.star(x, y, size, rgb, false),
             Icon::StarFilled => canvas.star(x, y, size, rgb, true),
             Icon::Remove => canvas.remove(x, y, size, rgb),
+            Icon::Add => canvas.plus(x, y, size, rgb),
+            Icon::More => canvas.ellipsis(x, y, size, rgb),
+            Icon::Up => canvas.chevron(x, y, size, rgb, false),
+            Icon::Down => canvas.chevron(x, y, size, rgb, true),
         }
     }
 }
