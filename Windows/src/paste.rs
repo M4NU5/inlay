@@ -97,10 +97,9 @@ pub fn paste(
     // Checked after the clipboard work, which can wait on other apps. The
     // check itself can take a moment, so the window must still be in front.
     let target = unsafe { GetForegroundWindow() };
-    let focused = match found {
-        Some(found) => target == found,
-        None => accepts_text(target) && unsafe { GetForegroundWindow() } == target,
-    };
+    let focused = found.is_none_or(|found| found == target)
+        && accepts_text(target)
+        && unsafe { GetForegroundWindow() } == target;
     if !focused {
         if never_copy {
             restore(&saved, staged, text);

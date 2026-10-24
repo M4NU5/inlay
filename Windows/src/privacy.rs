@@ -15,12 +15,12 @@ const STORE: &str =
     r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
 
 /// The first switch in Settings that keeps Inlay from the microphone, in the
-/// order Settings shows them. `None` when Inlay may record.
+/// order Settings shows them. `None` when Inlay may record. "Let apps access
+/// your microphone" governs Store apps only, so it doesn't count for Inlay.
 pub fn microphone_blocked() -> Option<&'static str> {
     let desktop = format!(r"{STORE}\NonPackaged");
     [
         (HKEY_LOCAL_MACHINE, STORE, "Microphone access"),
-        (HKEY_CURRENT_USER, STORE, "Let apps access your microphone"),
         (
             HKEY_CURRENT_USER,
             desktop.as_str(),
