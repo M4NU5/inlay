@@ -162,7 +162,7 @@ impl App {
                 .config
                 .save()
                 .map_err(|error| format!("Could not save settings: {error}"))?;
-            hotkey::set_key(hotkey::key(&connection.config.hotkey).vk);
+            hotkey::apply(&connection.config);
             *settings = connection;
         }
         self.recheck();
@@ -178,7 +178,7 @@ impl App {
         config
             .save()
             .map_err(|error| format!("Could not save settings: {error}"))?;
-        hotkey::set_key(hotkey::key(&config.hotkey).vk);
+        hotkey::apply(&config);
         settings.config = config;
         drop(settings);
         tray::refresh();

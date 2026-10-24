@@ -3,7 +3,7 @@
 use super::layout::{Builder, Control, Row};
 use super::{
     CLIPBOARD, CONNECT, Context, ENDPOINT, HOTKEY, LAUNCH, MIC_SETTINGS, MUTE, NAME, TOKEN,
-    server_line,
+    TRIGGER, server_line,
 };
 use crate::app::Server;
 use crate::{config, hotkey, privacy, theme};
@@ -41,8 +41,17 @@ pub fn build(page: &mut Builder, context: &Context) {
 
     page.section("This PC");
     let key = hotkey::key(&context.settings.config.hotkey);
-    page.card(vec![
+    let trigger = hotkey::Trigger::from_id(&context.settings.config.activation_mode);
+    let mut rows = vec![
         Row::new("Dictation key").control(HOTKEY, Control::choice(key.label, false)),
+        Row::new("Trigger").control(TRIGGER, Control::choice(trigger.label(), false)),
+    ];
+    if trigger == hotkey::Trigger::Tap {
+        rows.push(Row::caption(
+            "Recording continues until you tap again or reach 3 minutes.",
+        ));
+    }
+    rows.extend([
         Row::new("Mute system audio while recording").control(
             MUTE,
             Control::Switch {
@@ -58,6 +67,7 @@ pub fn build(page: &mut Builder, context: &Context) {
         Row::new("Start Inlay when I sign in")
             .control(LAUNCH, Control::Switch { on: context.launch }),
     ]);
+    page.card(rows);
     page.gap(32);
 
     page.section("Permissions");

@@ -170,6 +170,7 @@ const COPY: i32 = 109;
 const TEST: i32 = 110;
 const GEAR: i32 = 111;
 const MUTE: i32 = 112;
+const TRIGGER: i32 = 171;
 const CLIPBOARD: i32 = 173;
 const MIC_SETTINGS: i32 = 174;
 const HISTORY: i32 = 140;
@@ -204,7 +205,7 @@ const NAV: i32 = 120;
 /// Server preferences' dictionary controls, made as they are shown: `DYNAMIC + slot`.
 const DYNAMIC: i32 = 40000;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 34] = [
+const BUTTONS: [i32; 35] = [
     CHECK,
     COPY,
     TEST,
@@ -224,6 +225,7 @@ const BUTTONS: [i32; 34] = [
     MICROPHONE,
     CONNECT,
     HOTKEY,
+    TRIGGER,
     LAUNCH,
     MUTE,
     CLIPBOARD,
@@ -243,6 +245,7 @@ const BUTTONS: [i32; 34] = [
 /// Popup list choices: `PICK_MICROPHONE + index` and `PICK_HOTKEY + index`.
 const PICK_MICROPHONE: usize = 1000;
 const PICK_HOTKEY: usize = 2000;
+const PICK_TRIGGER: usize = 2500;
 const PICK_DEVICE: usize = 3000;
 const PICK_SOURCE: usize = 4000;
 const PICK_LANGUAGE: usize = 5000;
@@ -969,6 +972,18 @@ fn open_choice(window: HWND, id: i32) {
             PICK_SOURCE
         };
         (labels, selected, base)
+    } else if id == TRIGGER {
+        let current = hotkey::Trigger::from_id(&app::shared().settings().config.activation_mode);
+        (
+            hotkey::TRIGGERS
+                .iter()
+                .map(|trigger| trigger.label().to_string())
+                .collect(),
+            hotkey::TRIGGERS
+                .iter()
+                .position(|trigger| *trigger == current),
+            PICK_TRIGGER,
+        )
     } else {
         let current = app::shared().settings().config.hotkey;
         (
@@ -1020,7 +1035,13 @@ fn pick(window: HWND, id: usize) {
         return relayout(window);
     }
     let app = app::shared();
-    let (result, field) = if id >= PICK_HOTKEY {
+    let (result, field) = if id >= PICK_TRIGGER {
+        let trigger = hotkey::TRIGGERS.get(id - PICK_TRIGGER);
+        let result = trigger.map_or(Ok(()), |trigger| {
+            app.change_config(|config| config.activation_mode = trigger.id().into())
+        });
+        (result, TRIGGER)
+    } else if id >= PICK_HOTKEY {
         let key = hotkey::KEYS.get(id - PICK_HOTKEY);
         let result = key.map_or(Ok(()), |key| {
             app.change_config(|config| config.hotkey = key.id.into())
@@ -1112,7 +1133,7 @@ fn command(window: HWND, id: i32) {
         GEAR => return show_page(window, Page::ThisPc),
         HISTORY => return show_page(window, Page::History),
         CONNECT => return connect(window),
-        MICROPHONE | HOTKEY | DEVICE | SOURCE | LANGUAGE | RETENTION => {
+        MICROPHONE | HOTKEY | TRIGGER | DEVICE | SOURCE | LANGUAGE | RETENTION => {
             return open_choice(window, id);
         }
         SAVE_SHARED => server::save(window),

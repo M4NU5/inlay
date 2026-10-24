@@ -191,14 +191,24 @@ fn add_icon(window: HWND) {
 
 /// The look and text for the current state, most urgent first.
 fn describe(app: &App) -> (Look, String) {
-    let key = hotkey::key(&app.settings().config.hotkey).label;
+    let config = app.settings().config;
+    let key = hotkey::key(&config.hotkey).label;
+    let trigger = hotkey::Trigger::from_id(&config.activation_mode);
+    let verb = trigger.verb();
+    let finish = match trigger {
+        hotkey::Trigger::Hold => "Release".to_string(),
+        _ => format!("{verb} again"),
+    };
     app.status(|status| {
         let notice = status
             .notice
             .as_ref()
             .filter(|notice| notice.until > Instant::now());
         if status.recording {
-            (Look::Recording, "Listening. Release to transcribe.".into())
+            (
+                Look::Recording,
+                format!("Listening. {finish} to transcribe."),
+            )
         } else if status.processing > 0 {
             (Look::Processing, "Transcribing…".into())
         } else if let Some(notice) = notice {
@@ -212,7 +222,7 @@ fn describe(app: &App) -> (Look, String) {
             )
         } else {
             match &status.server {
-                Server::Ready => (Look::Idle, format!("Ready. Hold {key} to talk.")),
+                Server::Ready => (Look::Idle, format!("Ready. {verb} {key} to talk.")),
                 Server::Checking => (Look::Idle, "Connecting to the server…".into()),
                 Server::Unavailable(message) => (Look::Error, message.clone()),
             }
@@ -224,7 +234,9 @@ fn describe(app: &App) -> (Look, String) {
 /// When all is well the message says how to dictate instead.
 fn header(app: &App) -> Header {
     let (look, text) = describe(app);
-    let key = hotkey::key(&app.settings().config.hotkey).label;
+    let config = app.settings().config;
+    let key = hotkey::key(&config.hotkey).label;
+    let verb = hotkey::Trigger::from_id(&config.activation_mode).verb();
     let (server, quiet) = app.status(|status| {
         let quiet = status
             .notice
@@ -244,7 +256,7 @@ fn header(app: &App) -> Header {
     Header {
         state: state.into(),
         dot,
-        message: if ready { format!("Hold {key}") } else { text },
+        message: if ready { format!("{verb} {key}") } else { text },
         ready,
     }
 }

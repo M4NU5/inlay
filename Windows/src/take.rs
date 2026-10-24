@@ -7,7 +7,8 @@ use crate::api::{Api, ApiError, Generation};
 use crate::app::{App, Dictation, Ticket};
 use crate::audio::{self, SAMPLE_RATE, Stop};
 use crate::controller::Event;
-use crate::{hotkey, mute, paste};
+use crate::hotkey::{self, Trigger};
+use crate::{mute, paste};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
@@ -241,7 +242,12 @@ fn too_short(test: bool) -> &'static str {
     if test {
         "Too short to transcribe. Speak for a moment before finishing the test."
     } else {
-        "Too short to transcribe. Hold the key while you speak."
+        match hotkey::current_trigger() {
+            Trigger::Hold => "Too short to transcribe. Hold the key while you speak.",
+            Trigger::DoubleTap | Trigger::Tap => {
+                "Too short to transcribe. Speak for a moment before stopping."
+            }
+        }
     }
 }
 
