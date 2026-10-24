@@ -46,6 +46,9 @@ const TERMINAL_CLASSES: [&str; 2] = ["ConsoleWindowClass", "CASCADIA_HOSTING_WIN
 /// Long enough for apps to read the clipboard after Ctrl+V, short enough that
 /// the user's own clipboard comes back before they need it.
 const RESTORE_DELAY: Duration = Duration::from_millis(500);
+/// How many times to wait for an app holding the clipboard before giving up
+/// on putting the user's contents back. Each wait is up to half a second.
+const RESTORE_ATTEMPTS: u32 = 4;
 const MAX_FORMAT_BYTES: usize = 64 * 1024 * 1024;
 const VK_V: VIRTUAL_KEY = 0x56;
 /// An unassigned key code. Pressing it before releasing Alt or Win stops that
@@ -84,7 +87,12 @@ pub fn paste(
         return Err(nowhere());
     }
     let saved = snapshot()?;
-    write_text(text, true)?;
+    if let Err((error, emptied)) = write_text(text, true) {
+        if let Some(emptied) = emptied {
+            restore(&saved, emptied, text);
+        }
+        return Err(error);
+    }
     let staged = unsafe { GetClipboardSequenceNumber() };
     // Checked after the clipboard work, which can wait on other apps. The
     // check itself can take a moment, so the window must still be in front.
@@ -95,7 +103,7 @@ pub fn paste(
     };
     if !focused {
         if never_copy {
-            restore(&saved, staged);
+            restore(&saved, staged, text);
             return Err(nowhere());
         }
         copy(text)?;
@@ -106,7 +114,7 @@ pub fn paste(
     let terminal = is_terminal(target);
     release_modifiers();
     if !send_paste(terminal) {
-        restore(&saved, staged);
+        restore(&saved, staged, text);
         return Err("Windows blocked the paste keystroke.".into());
     }
     log!(
@@ -115,7 +123,7 @@ pub fn paste(
     );
     sent(Delivered::Pasted);
     thread::sleep(RESTORE_DELAY);
-    restore(&saved, staged);
+    restore(&saved, staged, text);
     Ok(Delivered::Pasted)
 }
 
@@ -126,7 +134,7 @@ fn nowhere() -> String {
 
 /// Leaves `text` on the clipboard, where clipboard history may keep it.
 pub fn copy(text: &str) -> Result<(), String> {
-    write_text(text, false)
+    write_text(text, false).map_err(|(error, _)| error)
 }
 
 /// Opens the clipboard for one operation, owned by a short-lived message-only
@@ -239,20 +247,21 @@ fn copyable(format: u32) -> bool {
 }
 
 /// `private` adds the markers that keep the staged transcript out of clipboard
-/// history, cloud clipboard and clipboard managers.
-fn write_text(text: &str, private: bool) -> Result<(), String> {
-    let units: Vec<u16> = text
-        .replace("\r\n", "\n")
-        .replace('\n', "\r\n")
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
+/// history, cloud clipboard and clipboard managers. A failure after emptying
+/// the clipboard also gives its sequence number then, so the caller can put
+/// back what was there.
+fn write_text(text: &str, private: bool) -> Result<(), (String, Option<u32>)> {
+    let units = clipboard_text(text);
     let bytes: Vec<u8> = units.iter().flat_map(|unit| unit.to_le_bytes()).collect();
-    let _clipboard = Clipboard::open()?;
+    let _clipboard = Clipboard::open().map_err(|error| (error, None))?;
     if unsafe { EmptyClipboard() } == 0 {
-        return Err("Windows would not let Inlay use the clipboard.".into());
+        return Err((
+            "Windows would not let Inlay use the clipboard.".into(),
+            None,
+        ));
     }
-    set(u32::from(CF_UNICODETEXT), &bytes)?;
+    set(u32::from(CF_UNICODETEXT), &bytes)
+        .map_err(|error| (error, Some(unsafe { GetClipboardSequenceNumber() })))?;
     if private {
         let markers = [
             ("ExcludeClipboardContentFromMonitorProcessing", 1u32),
@@ -267,6 +276,35 @@ fn write_text(text: &str, private: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// `text` as the clipboard holds it: Windows line endings, ending in NUL.
+fn clipboard_text(text: &str) -> Vec<u16> {
+    text.replace("\r\n", "\n")
+        .replace('\n', "\r\n")
+        .encode_utf16()
+        .chain(Some(0))
+        .collect()
+}
+
+/// Whether the open clipboard's text is `text`.
+fn holds(text: &str) -> bool {
+    let units = clipboard_text(text);
+    unsafe {
+        let handle = GetClipboardData(u32::from(CF_UNICODETEXT));
+        if handle.is_null() {
+            return false;
+        }
+        let size = GlobalSize(handle) / 2;
+        let pointer = GlobalLock(handle) as *const u16;
+        if pointer.is_null() {
+            return false;
+        }
+        let held = std::slice::from_raw_parts(pointer, size);
+        let same = held.starts_with(&units);
+        GlobalUnlock(handle);
+        same
+    }
 }
 
 /// Must run while the clipboard is open. The clipboard owns the memory on success.
@@ -291,20 +329,27 @@ fn set(format: u32, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// Puts the saved contents back, unless something newer was copied meanwhile.
-fn restore(saved: &[(u32, Vec<u8>)], staged: u32) {
-    if unsafe { GetClipboardSequenceNumber() } != staged {
-        log!("paste: clipboard changed after staging; leaving the newer contents");
+/// Takes `text` back off the clipboard and puts the saved contents back,
+/// unless something newer was copied meanwhile. The transcript copied again,
+/// as some clipboard managers do, isn't newer. Waits a while for an app
+/// holding the clipboard, so the transcript isn't left in place of the user's
+/// own contents.
+fn restore(saved: &[(u32, Vec<u8>)], staged: u32, text: &str) {
+    for _ in 0..RESTORE_ATTEMPTS {
+        let Ok(_clipboard) = Clipboard::open() else {
+            continue;
+        };
+        if unsafe { GetClipboardSequenceNumber() } != staged && !holds(text) {
+            log!("paste: clipboard changed after staging; leaving the newer contents");
+            return;
+        }
+        unsafe { EmptyClipboard() };
+        for (format, bytes) in saved {
+            let _ = set(*format, bytes);
+        }
         return;
     }
-    let Ok(_clipboard) = Clipboard::open() else {
-        log!("paste: could not reopen the clipboard to restore it");
-        return;
-    };
-    unsafe { EmptyClipboard() };
-    for (format, bytes) in saved {
-        let _ = set(*format, bytes);
-    }
+    log!("paste: another app held the clipboard, so its previous contents couldn't be put back");
 }
 
 /// Whether the focused control takes typed text: a console, a control showing
