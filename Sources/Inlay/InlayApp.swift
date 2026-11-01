@@ -66,7 +66,7 @@ final class InlayAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
         configureStatusItem()
         let defaults = UserDefaults.standard
         if !defaults.bool(forKey: "hasLaunched")
-            || (controller.preferences.endpoint == ClientPreferencesStore.defaultEndpoint
+            || (controller.preferences.endpoints == [ClientPreferencesStore.defaultEndpoint]
                 && controller.serverHealth == nil
                 && !LocalServerPaths.installedMarkerExists) {
             initialPage = .device

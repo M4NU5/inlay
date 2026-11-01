@@ -22,6 +22,10 @@ struct InlayMenuView: View {
                             .font(.caption)
                             .foregroundStyle(InlayPalette.muted)
                             .lineLimit(1)
+                    } else if controller.isUsingFallback {
+                        Text("Fallback")
+                            .font(.caption)
+                            .foregroundStyle(InlayPalette.muted)
                     }
                 }
                 .frame(width: 112, alignment: .trailing)

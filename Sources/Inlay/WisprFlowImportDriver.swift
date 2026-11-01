@@ -80,7 +80,8 @@ final class WisprFlowImportDriver: ObservableObject {
     private var wisprFlowMaterializationTask: Task<WisprFlowSourceSession, Error>?
     private var wisprFlowImportRevision = 0
     private var wisprFlowActiveReaders: [Int: WisprFlowSourceReader] = [:]
-    private var wisprFlowDestinationEndpoint: String?
+    /// The server this import writes to, which may no longer be the active one.
+    private(set) var wisprFlowDestinationEndpoint: String?
 
     private let makeClient: () throws -> ServerClient
     private let isDictationBusy: () -> Bool
@@ -213,7 +214,7 @@ final class WisprFlowImportDriver: ObservableObject {
             wisprFlowMaterializationTask = nil
             wisprFlowImportTask?.cancel()
             wisprFlowImportTask = nil
-            wisprFlowDestinationEndpoint = nil
+            // Kept until the sheet closes so the result names the server it went to.
             state = .finished(preview, counts, cancelled: true)
         }
         wisprFlowPrepareTask?.cancel()
@@ -348,7 +349,6 @@ final class WisprFlowImportDriver: ObservableObject {
         }
         guard revision == wisprFlowImportRevision else { return }
         wisprFlowImportTask = nil
-        wisprFlowDestinationEndpoint = nil
         state = .finished(preview, counts, cancelled: cancelled)
     }
 
