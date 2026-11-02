@@ -2,7 +2,7 @@
 //! last dictation with Copy, as on the Mac's home page.
 
 use super::layout::{Builder, Control, Icon, Item};
-use super::{CHECK, COPY, Context, GEAR, HISTORY, TEST, server_line, test_button};
+use super::{CHECK, COPY, COPY_FINISHED, Context, GEAR, HISTORY, TEST, server_line, test_button};
 use crate::app::Server;
 use crate::hotkey;
 use crate::theme::{self, Font, px};
@@ -29,6 +29,19 @@ pub fn build(page: &mut Builder, context: &Context) {
         page.note(message, theme::MUTED);
     }
     page.gap(26);
+
+    if let Some(finished) = &context.finished {
+        let copy = Control::button("Copy")
+            .with_icon(Icon::Copy)
+            .enabled(!context.recording && !context.processing);
+        page.status(
+            theme::ORANGE,
+            "A dictation finished without being pasted.",
+            &format!("{:.1} s audio", finished.seconds),
+            Some((COPY_FINISHED, copy)),
+        );
+        page.gap(18);
+    }
 
     transcript(page, context);
     page.gap(24);

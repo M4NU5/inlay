@@ -19,10 +19,11 @@ use crate::controller::Event;
 use crate::icons::Look as TrayLook;
 use crate::menu::{self, Anchor, Entry};
 use crate::microphones::Input;
+use crate::pending::Finished;
 use crate::privacy;
 use crate::theme::{self, Font, px, rect};
 use crate::win::{from_wide, wide};
-use crate::{audio, config, hotkey, startup, tray};
+use crate::{audio, config, credentials, hotkey, startup, tray};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
@@ -34,8 +35,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, EM_SETMARGINS, ODS_FOCUS, ODS_NOFOCUSRECT, ODS_SELECTED, SetWindowTheme,
-    WM_MOUSELEAVE,
+    DRAWITEMSTRUCT, EM_GETMODIFY, EM_SETMARGINS, EM_SETMODIFY, ODS_FOCUS, ODS_NOFOCUSRECT,
+    ODS_SELECTED, SetWindowTheme, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, IsWindowEnabled, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
@@ -114,6 +115,8 @@ pub struct Context {
     /// A test take is recording or transcribing.
     pub test_busy: bool,
     pub last: Option<Dictation>,
+    /// A dictation that finished with no take left to paste it.
+    pub finished: Option<Finished>,
     pub error: Option<String>,
     /// The latest test's transcript, or why it stopped without one.
     pub test: Option<Result<Dictation, String>>,
@@ -176,6 +179,7 @@ const TRIGGER: i32 = 171;
 const SHORTCUT_CHECK: i32 = 172;
 const CLIPBOARD: i32 = 173;
 const MIC_SETTINGS: i32 = 174;
+const COPY_FINISHED: i32 = 175;
 const HISTORY: i32 = 140;
 const DEVICE: i32 = 141;
 const SOURCE: i32 = 142;
@@ -218,9 +222,10 @@ const SLOTS: i32 = 30000;
 /// Server preferences' dictionary controls, made as they are shown: `DYNAMIC + slot`.
 const DYNAMIC: i32 = 40000;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 42] = [
+const BUTTONS: [i32; 43] = [
     CHECK,
     COPY,
+    COPY_FINISHED,
     TEST,
     HISTORY,
     GEAR,
@@ -267,6 +272,7 @@ const PICK_MICROPHONE: usize = 1000;
 const PICK_PROFILE: usize = 1400;
 /// Rename list, then Delete list.
 const PICK_LIST: usize = 1800;
+const _: () = assert!(PICK_PROFILE + crate::microphones::MAX_PROFILES <= PICK_LIST);
 const PICK_HOTKEY: usize = 2000;
 const PICK_TRIGGER: usize = 2500;
 const PICK_DEVICE: usize = 3000;
@@ -583,6 +589,7 @@ fn context() -> Context {
         processing: status.processing > 0,
         test_busy: status.tests > 0,
         last: status.last.clone(),
+        finished: None,
         error: status.error.clone(),
         test: status.test.clone(),
         inputs: Vec::new(),
@@ -592,6 +599,7 @@ fn context() -> Context {
         checking: status.checking.is_some(),
         check_lines: status.check_lines.clone(),
     });
+    context.finished = app.pending.finished();
     let state = state();
     context.inputs = state.inputs.clone();
     context.default_input = state.default_input.clone();
@@ -1099,10 +1107,29 @@ fn say(message: Option<Message>) {
 fn connect(window: HWND) {
     let result = (|| {
         let endpoint = config::normalize_endpoint(&text(window, ENDPOINT))?;
-        let token = config::validate_token(&text(window, TOKEN))?;
+        let typed = config::validate_token(&text(window, TOKEN))?;
         let name = config::validate_device_name(&text(window, NAME))?;
         let app = app::shared();
         let mut settings = app.settings();
+        // Unless a token was typed or pasted since the box was last filled,
+        // use the one saved for the address being connected to. The box may
+        // still show another server's token, for example after a failed switch.
+        let edited = unsafe { SendMessageW(GetDlgItem(window, TOKEN), EM_GETMODIFY, 0, 0) } != 0;
+        let token = if edited {
+            typed
+        } else {
+            let same = config::normalize_endpoint(&settings.config.endpoint)
+                .ok()
+                .as_ref()
+                == Some(&endpoint);
+            let saved = if same {
+                settings.token.clone()
+            } else {
+                credentials::read(&endpoint)
+            };
+            set_text(window, TOKEN, &saved);
+            saved
+        };
         settings.config.endpoint = endpoint;
         settings.config.device_name = name;
         settings.token = token;
@@ -1115,6 +1142,8 @@ fn connect(window: HWND) {
             // Show the address as saved, without a trailing slash.
             let saved = app::shared().settings().config.endpoint;
             set_text(window, ENDPOINT, &saved);
+            // The token is saved for this address now, so it no longer counts as typed.
+            unsafe { SendMessageW(GetDlgItem(window, TOKEN), EM_SETMODIFY, 0, 0) };
             say(None);
         }
         Err(text) => say(Some(Message { text, error: true })),
@@ -1153,6 +1182,7 @@ fn command(window: HWND, id: i32) {
     match id {
         CHECK => app.recheck(),
         COPY => app.copy_last(),
+        COPY_FINISHED => app.copy_finished(),
         TEST => {
             let _ = app.events.send(Event::Test);
         }

@@ -163,8 +163,9 @@ pub fn recently_closed() -> bool {
         .is_some_and(|closed| closed.elapsed() < Duration::from_millis(300))
 }
 
-/// Replaces the header of an open menu owned by `owner`.
-pub fn set_header(owner: HWND, header: Header) {
+/// Replaces the header and entries of an open menu owned by `owner`, so it
+/// keeps up with the app while it is open.
+pub fn update(owner: HWND, header: Header, entries: Vec<Entry>) {
     let window = WINDOW.load(Ordering::SeqCst);
     if window.is_null() {
         return;
@@ -184,8 +185,21 @@ pub fn set_header(owner: HWND, header: Header) {
             return;
         };
         state.header = Some(header);
+        // The highlight follows its item, not its row, so Enter still runs
+        // the command it showed. It goes if the item went or turned off.
+        let hot = state.hot.and_then(|hot| match state.entries.get(hot) {
+            Some(Entry::Item { id, .. }) => Some(*id),
+            _ => None,
+        });
+        state.entries = entries;
+        state.hot = hot.and_then(|hot| {
+            state.entries.iter().position(
+                |entry| matches!(entry, Entry::Item { id, enabled: true, .. } if *id == hot),
+            )
+        });
         state.view = layout(state).height.min(work.bottom - work.top);
         scroll(state, 0);
+        reveal(state);
         (state.view, state.above)
     };
     unsafe {

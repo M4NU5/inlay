@@ -88,6 +88,10 @@ impl Phase {
     }
 }
 
+fn down() -> bool {
+    hotkey::is_down(hotkey::current_key())
+}
+
 pub fn run(app: Arc<App>, events: Receiver<Event>) {
     let mut phase = Phase::Idle;
     let mut takes = 0u64;
@@ -101,9 +105,11 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
         // the key may have changed under a press.
         let mut guessed = false;
         let timeout = match &phase {
-            Phase::Pending(since) => {
-                Some(ACCEPT_DELAY.saturating_sub(since.elapsed()).min(WATCHDOG))
-            }
+            // Past the delay, a hold waits only on the watchdog for its key.
+            Phase::Pending(since) => match ACCEPT_DELAY.saturating_sub(since.elapsed()) {
+                left if left.is_zero() => Some(WATCHDOG),
+                left => Some(left.min(WATCHDOG)),
+            },
             phase if phase.holds_key() => Some(WATCHDOG),
             _ => None,
         };
@@ -281,6 +287,11 @@ pub fn run(app: Arc<App>, events: Receiver<Event>) {
                 } else {
                     Phase::Idle
                 }
+            }
+            // The key must still be down: the hook may have missed its key-up,
+            // which the watchdog then reports.
+            (Phase::Pending(since), None) if since.elapsed() >= ACCEPT_DELAY && !down() => {
+                Phase::Pending(since)
             }
             (Phase::Pending(since), None) if since.elapsed() >= ACCEPT_DELAY && checking => {
                 say("Shortcut recognized. Recording was intentionally skipped.");

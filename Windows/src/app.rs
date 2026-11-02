@@ -3,11 +3,13 @@
 use crate::api::{API_VERSION, Api, ApiError};
 use crate::config::Config;
 use crate::controller::Event;
+use crate::pending::Pending;
 use crate::{credentials, hotkey, paste, settings as window, tray};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
@@ -132,6 +134,8 @@ pub struct App {
     pub events: Sender<Event>,
     wake_monitor: Sender<()>,
     pub deliveries: Arc<Deliveries>,
+    /// Sealed takes not yet delivered, kept across restarts.
+    pub pending: Arc<Pending>,
 }
 
 impl App {
@@ -160,6 +164,7 @@ impl App {
             events,
             wake_monitor,
             deliveries: Arc::new(Deliveries::default()),
+            pending: Pending::load(),
         }
     }
 
@@ -173,12 +178,15 @@ impl App {
     pub fn save_connection(&self, connection: Settings) -> Result<(), String> {
         {
             let mut settings = lock(&self.settings);
+            let previous = credentials::read(&connection.config.endpoint);
             credentials::write(&connection.config.endpoint, &connection.token)?;
-            connection
-                .config
-                .save()
-                .map_err(|error| format!("Could not save settings: {error}"))?;
+            if let Err(error) = connection.config.save() {
+                // Keep the saved token in step with the settings still running.
+                let _ = credentials::write(&connection.config.endpoint, &previous);
+                return Err(format!("Could not save settings: {error}"));
+            }
             hotkey::apply(&connection.config);
+            self.pending.keep_only(&connection.config.endpoint);
             *settings = connection;
         }
         self.recheck();
@@ -319,8 +327,18 @@ impl App {
         });
     }
 
+    /// A take is recording or on its way to a paste. Copying meanwhile could
+    /// land between a take staging its text and the app reading it, so the
+    /// copy actions wait, as on the Mac.
+    pub fn busy(&self) -> bool {
+        self.status(|status| status.recording || status.processing > 0)
+    }
+
     /// Copies the last dictation, from the tray menu or the Dictation page.
     pub fn copy_last(&self) {
+        if self.busy() {
+            return;
+        }
         let Some(text) = self
             .status(|status| status.last.as_ref().map(|last| last.text.clone()))
             .filter(|text| !text.is_empty())
@@ -338,6 +356,37 @@ impl App {
             }
             Err(message) => self.fail(&message),
         }
+    }
+
+    /// Copies a dictation that finished with no take left to paste it, then
+    /// tells the server, as the Mac does.
+    pub fn copy_finished(&self) {
+        if self.busy() {
+            return;
+        }
+        let Some(finished) = self.pending.finished() else {
+            return;
+        };
+        if let Err(message) = paste::copy(&finished.text) {
+            return self.fail(&message);
+        }
+        self.pending.forget(&finished.id);
+        self.set_last(Dictation {
+            text: finished.text,
+            outcome: "Copied to clipboard".into(),
+            seconds: finished.seconds,
+        });
+        self.note("Copied the finished dictation.");
+        let settings = self.settings();
+        let id = finished.id;
+        thread::spawn(move || {
+            let result = Api::new(&settings.config.endpoint, &settings.token)
+                .map_err(ApiError::Invalid)
+                .and_then(|api| api.delivery(&id, "copied", "Copied to clipboard later"));
+            if let Err(error) = result {
+                log!("pending: could not report delivery for {id}: {error}");
+            }
+        });
     }
 
     /// Admission check before a take. Uses the monitor's last answer when the
@@ -511,6 +560,13 @@ pub fn monitor(app: Arc<App>, wake: Receiver<()>) {
         let pause = match app.probe(&settings) {
             Ok(_) => {
                 app.set_server(Server::Ready);
+                // The check may have enrolled, replacing the token just read.
+                let current = app.settings();
+                if current.config.endpoint == settings.config.endpoint
+                    && let Ok(api) = Api::new(&current.config.endpoint, &current.token)
+                {
+                    app.pending.reconcile(&api, &current.config.endpoint);
+                }
                 30
             }
             Err(unready) => {

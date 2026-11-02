@@ -8,6 +8,7 @@
 use crate::hotkey::{self, INJECTED_MARKER};
 use crate::win::{from_wide, wide};
 use std::ptr::{null, null_mut};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::Duration;
 use windows::Win32::System::Com::{
@@ -20,8 +21,7 @@ use windows::Win32::UI::Accessibility::{
 use windows_sys::Win32::Foundation::{GlobalFree, HWND};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
-    GetClipboardFormatNameW, GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW,
-    SetClipboardData,
+    GetClipboardFormatNameW, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{
@@ -78,6 +78,7 @@ pub fn paste(
     never_copy: bool,
     sent: impl FnOnce(Delivered),
 ) -> Result<Delivered, String> {
+    let _turn = turn();
     // With `never_copy`, the field is found before staging, so a transcript
     // with nowhere to go never reaches the clipboard.
     let found = never_copy.then(|| unsafe { GetForegroundWindow() });
@@ -86,14 +87,18 @@ pub fn paste(
     {
         return Err(nowhere());
     }
-    let saved = snapshot()?;
-    if let Err((error, emptied)) = write_text(text, true) {
-        if let Some(emptied) = emptied {
-            restore(&saved, emptied, text);
+    // Saved and staged in one clipboard session, so nothing copied in between is lost.
+    let saved = {
+        let _clipboard = Clipboard::open()?;
+        let saved = snapshot();
+        if let Err((error, emptied)) = write_text(text, true) {
+            if emptied {
+                put_back(&saved);
+            }
+            return Err(error);
         }
-        return Err(error);
-    }
-    let staged = unsafe { GetClipboardSequenceNumber() };
+        saved
+    };
     // Checked after the clipboard work, which can wait on other apps. The
     // check itself can take a moment, so the window must still be in front.
     let target = unsafe { GetForegroundWindow() };
@@ -102,10 +107,10 @@ pub fn paste(
         && unsafe { GetForegroundWindow() } == target;
     if !focused {
         if never_copy {
-            restore(&saved, staged, text);
+            restore(&saved, text);
             return Err(nowhere());
         }
-        copy(text)?;
+        copy_now(text)?;
         log!("paste: no text field has focus, so the transcript was copied");
         sent(Delivered::Copied);
         return Ok(Delivered::Copied);
@@ -113,7 +118,7 @@ pub fn paste(
     let terminal = is_terminal(target);
     release_modifiers();
     if !send_paste(terminal) {
-        restore(&saved, staged, text);
+        restore(&saved, text);
         return Err("Windows blocked the paste keystroke.".into());
     }
     log!(
@@ -122,7 +127,7 @@ pub fn paste(
     );
     sent(Delivered::Pasted);
     thread::sleep(RESTORE_DELAY);
-    restore(&saved, staged, text);
+    restore(&saved, text);
     Ok(Delivered::Pasted)
 }
 
@@ -132,8 +137,31 @@ fn nowhere() -> String {
 }
 
 /// Leaves `text` on the clipboard, where clipboard history may keep it.
+/// Refuses during a paste rather than wait for it: copies come from the
+/// window and tray, which must not freeze.
 pub fn copy(text: &str) -> Result<(), String> {
+    let _turn = match TURN.try_lock() {
+        Ok(turn) => turn,
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => {
+            return Err("Inlay is pasting a dictation. Copy again in a moment.".into());
+        }
+    };
+    copy_now(text)
+}
+
+fn copy_now(text: &str) -> Result<(), String> {
+    let _clipboard = Clipboard::open()?;
     write_text(text, false).map_err(|(error, _)| error)
+}
+
+/// One clipboard job at a time: a whole paste, from staging the transcript to
+/// putting the old contents back, or a copy. A copy landing mid-paste could
+/// be pasted in place of the transcript, or erased when the paste restores.
+static TURN: Mutex<()> = Mutex::new(());
+
+fn turn() -> MutexGuard<'static, ()> {
+    TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Opens the clipboard for one operation, owned by a short-lived message-only
@@ -186,9 +214,8 @@ impl Drop for Clipboard {
 }
 
 /// Copies every format that is plain global memory: text, HTML, RTF, file
-/// lists and images (as CF_DIB/CF_DIBV5).
-fn snapshot() -> Result<Vec<(u32, Vec<u8>)>, String> {
-    let _clipboard = Clipboard::open()?;
+/// lists and images (as CF_DIB/CF_DIBV5). Must run while the clipboard is open.
+fn snapshot() -> Vec<(u32, Vec<u8>)> {
     let mut formats = Vec::new();
     let mut format = 0;
     loop {
@@ -216,7 +243,7 @@ fn snapshot() -> Result<Vec<(u32, Vec<u8>)>, String> {
             GlobalUnlock(handle);
         }
     }
-    Ok(formats)
+    formats
 }
 
 fn copyable(format: u32) -> bool {
@@ -245,22 +272,20 @@ fn copyable(format: u32) -> bool {
     !matches!(name.as_str(), "DataObject" | "Ole Private Data")
 }
 
-/// `private` adds the markers that keep the staged transcript out of clipboard
-/// history, cloud clipboard and clipboard managers. A failure after emptying
-/// the clipboard also gives its sequence number then, so the caller can put
-/// back what was there.
-fn write_text(text: &str, private: bool) -> Result<(), (String, Option<u32>)> {
+/// Must run while the clipboard is open. `private` adds the markers that keep
+/// the staged transcript out of clipboard history, cloud clipboard and
+/// clipboard managers. A failure says whether the clipboard was already
+/// emptied, so the caller can put back what was there.
+fn write_text(text: &str, private: bool) -> Result<(), (String, bool)> {
     let units = clipboard_text(text);
     let bytes: Vec<u8> = units.iter().flat_map(|unit| unit.to_le_bytes()).collect();
-    let _clipboard = Clipboard::open().map_err(|error| (error, None))?;
     if unsafe { EmptyClipboard() } == 0 {
         return Err((
             "Windows would not let Inlay use the clipboard.".into(),
-            None,
+            false,
         ));
     }
-    set(u32::from(CF_UNICODETEXT), &bytes)
-        .map_err(|error| (error, Some(unsafe { GetClipboardSequenceNumber() })))?;
+    set(u32::from(CF_UNICODETEXT), &bytes).map_err(|error| (error, true))?;
     if private {
         let markers = [
             ("ExcludeClipboardContentFromMonitorProcessing", 1u32),
@@ -329,26 +354,32 @@ fn set(format: u32, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Takes `text` back off the clipboard and puts the saved contents back,
-/// unless something newer was copied meanwhile. The transcript copied again,
-/// as some clipboard managers do, isn't newer. Waits a while for an app
-/// holding the clipboard, so the transcript isn't left in place of the user's
-/// own contents.
-fn restore(saved: &[(u32, Vec<u8>)], staged: u32, text: &str) {
+/// unless something else was copied meanwhile. Only the transcript itself is
+/// replaced, so it doesn't matter when another app copied, and the transcript
+/// copied again, as some clipboard managers do, still counts as Inlay's.
+/// Waits a while for an app holding the clipboard, so the transcript isn't
+/// left in place of the user's own contents.
+fn restore(saved: &[(u32, Vec<u8>)], text: &str) {
     for _ in 0..RESTORE_ATTEMPTS {
         let Ok(_clipboard) = Clipboard::open() else {
             continue;
         };
-        if unsafe { GetClipboardSequenceNumber() } != staged && !holds(text) {
+        if !holds(text) {
             log!("paste: clipboard changed after staging; leaving the newer contents");
             return;
         }
-        unsafe { EmptyClipboard() };
-        for (format, bytes) in saved {
-            let _ = set(*format, bytes);
-        }
+        put_back(saved);
         return;
     }
     log!("paste: another app held the clipboard, so its previous contents couldn't be put back");
+}
+
+/// Must run while the clipboard is open.
+fn put_back(saved: &[(u32, Vec<u8>)]) {
+    unsafe { EmptyClipboard() };
+    for (format, bytes) in saved {
+        let _ = set(*format, bytes);
+    }
 }
 
 /// Whether the focused control takes typed text: a console, a control showing

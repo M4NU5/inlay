@@ -34,6 +34,7 @@ const NOTICE_TIMER: usize = 1;
 const ID_COPY: usize = 11;
 const ID_OPEN: usize = 12;
 const ID_QUIT: usize = 13;
+const ID_FINISHED: usize = 14;
 
 /// Asks the UI thread to redraw the icon and tooltip. Safe from any thread.
 pub fn refresh() {
@@ -125,7 +126,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_REFRESH => {
             update_icon(window);
-            menu::set_header(window, header(app::shared()));
+            menu::update(window, header(app::shared()), entries(app::shared()));
             settings::refresh();
             overlay::update();
             0
@@ -133,7 +134,7 @@ unsafe extern "system" fn window_proc(
         WM_TIMER => {
             unsafe { KillTimer(window, NOTICE_TIMER) };
             update_icon(window);
-            menu::set_header(window, header(app::shared()));
+            menu::update(window, header(app::shared()), entries(app::shared()));
             0
         }
         WM_NOTIFY_ERROR => {
@@ -143,6 +144,7 @@ unsafe extern "system" fn window_proc(
         WM_COMMAND => {
             match wparam & 0xFFFF {
                 ID_COPY => app::shared().copy_last(),
+                ID_FINISHED => app::shared().copy_finished(),
                 ID_OPEN => settings::open(settings::Page::Dictation),
                 ID_QUIT => quit(window),
                 _ => {}
@@ -310,6 +312,18 @@ fn show_menu(window: HWND) {
         return;
     }
     let app = app::shared();
+    menu::show(
+        window,
+        Some(header(app)),
+        entries(app),
+        px(240),
+        Anchor::Cursor,
+    );
+}
+
+/// The menu's items for the app's state now.
+fn entries(app: &App) -> Vec<Entry> {
+    let busy = app.busy();
     let has_transcript = app.status(|status| {
         status
             .last
@@ -322,13 +336,17 @@ fn show_menu(window: HWND) {
         enabled,
         checked: false,
     };
-    let entries = vec![
-        item(ID_COPY, "Copy last message", has_transcript),
+    let mut entries = Vec::new();
+    if app.pending.finished().is_some() {
+        entries.push(item(ID_FINISHED, "Copy finished dictation", !busy));
+    }
+    entries.extend([
+        item(ID_COPY, "Copy last message", has_transcript && !busy),
         item(ID_OPEN, "Open Inlay…", true),
         Entry::Separator,
         item(ID_QUIT, "Quit Inlay", true),
-    ];
-    menu::show(window, Some(header(app)), entries, px(240), Anchor::Cursor);
+    ]);
+    entries
 }
 
 fn quit(window: HWND) {

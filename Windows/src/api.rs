@@ -60,8 +60,10 @@ impl ApiError {
     }
 
     /// The server answered without sealing the recording, so cancelling is safe.
+    /// A refused credential proves nothing: a lost reply may have sealed it
+    /// before the credential was replaced.
     pub fn is_definite_rejection(&self) -> bool {
-        matches!(self, ApiError::Rejected { status, .. } if (400..500).contains(status) && !matches!(status, 408 | 429))
+        matches!(self, ApiError::Rejected { status, .. } if (400..500).contains(status) && !matches!(status, 401 | 403 | 408 | 429))
     }
 }
 
@@ -197,10 +199,16 @@ pub struct Generation {
     pub insertion_text: String,
     #[serde(default)]
     pub preview_text: String,
+    /// The whole transcript, which a result found later is copied as.
+    #[serde(default)]
+    pub final_text: String,
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]
     pub continuation: Option<Value>,
+    /// The client's receipt. None until some client reports one.
+    #[serde(default)]
+    pub delivery: Option<Value>,
 }
 
 impl Generation {
@@ -354,7 +362,10 @@ enum Body<'a> {
 }
 
 impl Api {
+    /// Validates the address here too, so a hand-edited config can't send the
+    /// token over plain HTTP to a LAN address.
     pub fn new(endpoint: &str, token: &str) -> Result<Api, String> {
+        let base = crate::config::normalize_endpoint(endpoint)?;
         let tls = native_tls::TlsConnector::new()
             .map_err(|error| format!("TLS is unavailable: {error}"))?;
         let agent = ureq::AgentBuilder::new()
@@ -367,7 +378,7 @@ impl Api {
             .tls_connector(Arc::new(tls))
             .build();
         Ok(Api {
-            base: endpoint.trim_end_matches('/').to_string(),
+            base,
             token: token.to_string(),
             agent,
         })

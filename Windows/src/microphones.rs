@@ -6,6 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The Microphone page's list menu numbers its choices from a fixed block of
+/// ids, so the lists are capped well inside it.
+pub const MAX_PROFILES: usize = 100;
+
 /// An audio input, by its Windows endpoint ID.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Input {
@@ -99,10 +103,15 @@ impl Microphones {
             unique(&mut profile.priority);
             true
         });
+        self.profiles.truncate(MAX_PROFILES);
         if self.profiles.is_empty() {
             self.profiles.push(default_profile());
         }
-        if !ids.contains(&self.active_profile_id) {
+        if !self
+            .profiles
+            .iter()
+            .any(|profile| profile.id == self.active_profile_id)
+        {
             self.active_profile_id = self.profiles[0].id.clone();
         }
         if let Selection::Fixed { device } = &self.selection
@@ -172,6 +181,11 @@ impl Microphones {
     }
 
     pub fn add_profile(&mut self, name: &str) -> Result<(), String> {
+        if self.profiles.len() >= MAX_PROFILES {
+            return Err(format!(
+                "Inlay keeps up to {MAX_PROFILES} priority lists. Delete one first."
+            ));
+        }
         let name = self.valid_name(name, None)?;
         let id = uuid::Uuid::new_v4().to_string().to_uppercase();
         self.profiles.push(Profile {

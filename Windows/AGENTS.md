@@ -52,6 +52,7 @@ The machine running these checks usually belongs to someone who is using it.
 | `main.rs`                                   | Startup, single instance, threads, the `--paste` check.                                                 |
 | `controller.rs`                             | Hold state machine: acceptance delay, chord cancel, missed key-up watchdog.                             |
 | `take.rs`                                   | One take: admission, capture, acknowledged uploads, finish, events, ordered paste.                      |
+| `pending.rs`                                | Sealed takes not yet delivered, saved across restarts and offered for copying once they finish.         |
 | `api.rs`                                    | HTTP client for the v1 API, including NDJSON events and recovery.                                       |
 | `audio.rs`                                  | WASAPI capture through cpal, downmix and windowed-sinc resampling to 16 kHz.                            |
 | `microphones.rs`                            | Microphone priority lists and which input the next take uses, by Windows endpoint ID.                   |

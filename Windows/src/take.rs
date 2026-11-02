@@ -4,7 +4,7 @@
 //! A microphone test runs the same flow but never pastes.
 
 use crate::api::{Api, ApiError, Generation};
-use crate::app::{App, Dictation, Ticket};
+use crate::app::{App, Deliveries, Dictation, Ticket};
 use crate::audio::{self, SAMPLE_RATE, Stop};
 use crate::controller::Event;
 use crate::hotkey::{self, Trigger};
@@ -26,7 +26,8 @@ const STALL: Duration = Duration::from_secs(3);
 const STARTUP: Duration = Duration::from_secs(10);
 
 enum Signal {
-    Release,
+    /// Carries the take's place in the paste order, taken as the key came up.
+    Release(Ticket),
     Limit,
     Cancel(String),
     Failed(String),
@@ -35,12 +36,15 @@ enum Signal {
 pub struct Handle {
     pub id: u64,
     signals: Sender<Signal>,
+    deliveries: Arc<Deliveries>,
     thread: JoinHandle<()>,
 }
 
 impl Handle {
+    /// Takes the paste order place here, as the key comes up, so pastes follow
+    /// release order however long the take's thread takes to notice.
     pub fn release(&self) {
-        let _ = self.signals.send(Signal::Release);
+        let _ = self.signals.send(Signal::Release(self.deliveries.issue()));
     }
 
     pub fn cancel(&self, reason: &str) {
@@ -65,11 +69,15 @@ pub fn start(id: u64, app: Arc<App>, test: bool) -> Handle {
     // Set here, not on the take's thread, so takes claim the status in order.
     let test_take = test.then(|| app.test_take(id));
     app.set_recording(id, true, test);
+    let deliveries = app.deliveries.clone();
     let thread = thread::Builder::new()
         .name(format!("take-{id}"))
         .spawn(move || {
             let _test = test_take;
             let released = record(&app, &inbox, &own, id, test);
+            // A release that came after the time limit left a ticket queued.
+            // Dropping it now lets the takes behind this one paste.
+            drop(inbox);
             app.set_recording(id, false, test);
             let _ = app.events.send(Event::TakeEnded(id));
             if let Some(released) = released {
@@ -80,6 +88,7 @@ pub fn start(id: u64, app: Arc<App>, test: bool) -> Handle {
     Handle {
         id,
         signals,
+        deliveries,
         thread,
     }
 }
@@ -87,6 +96,7 @@ pub fn start(id: u64, app: Arc<App>, test: bool) -> Handle {
 /// A take whose microphone has stopped. Its uploads may still be draining.
 struct Released {
     api: Api,
+    endpoint: String,
     generation: String,
     uploader: JoinHandle<Result<u64, ApiError>>,
     keep_original: bool,
@@ -186,16 +196,19 @@ fn record(
     let signal = wait(inbox, &recording);
     let frames = recording.stop();
     drop(muted);
-    match signal {
-        Signal::Release => {}
-        Signal::Limit => app.note("Reached the 3-minute limit. Transcribing what was recorded."),
+    let ticket = match signal {
+        Signal::Release(ticket) => ticket,
+        Signal::Limit => {
+            app.note("Reached the 3-minute limit. Transcribing what was recorded.");
+            app.deliveries.issue()
+        }
         other => {
             cancel_quietly(&api, &generation);
             let _ = uploader.join();
             stopped_early(app, other, test);
             return None;
         }
-    }
+    };
     if frames < MIN_FRAMES {
         cancel_quietly(&api, &generation);
         let _ = uploader.join();
@@ -208,10 +221,11 @@ fn record(
     );
     Some(Released {
         api,
+        endpoint: settings.config.endpoint,
         generation,
         uploader,
         keep_original,
-        ticket: app.deliveries.issue(),
+        ticket,
         test,
     })
 }
@@ -255,7 +269,7 @@ fn stopped_early(app: &App, signal: Signal, test: bool) {
     match signal {
         Signal::Failed(message) => app.fail(&message),
         Signal::Cancel(reason) => app.note(&reason),
-        Signal::Release | Signal::Limit => app.note(too_short(test)),
+        Signal::Release(_) | Signal::Limit => app.note(too_short(test)),
     }
 }
 
@@ -304,6 +318,7 @@ fn process(app: &Arc<App>, released: Released, take: u64) {
     let busy = app.processing();
     let Released {
         api,
+        endpoint,
         generation,
         uploader,
         keep_original,
@@ -323,12 +338,18 @@ fn process(app: &Arc<App>, released: Released, take: u64) {
             return;
         }
     };
-    let finished = match api.finish(&generation, frames, keep_original.then_some(frames)) {
+    let original = keep_original.then_some(frames);
+    // Saved first: the server may seal it even if its answer never arrives.
+    // A test's result only matters while its page waits for it.
+    let tracked = (!test).then(|| app.pending.track(&generation, &endpoint, frames, original));
+    let finished = match api.finish(&generation, frames, original) {
         Ok(record) => record,
         Err(error) => {
             // Only a definite rejection proves the server did not seal it.
             if error.is_definite_rejection() {
                 cancel_quietly(&api, &generation);
+            } else if let Some(tracked) = tracked {
+                tracked.keep();
             }
             app.fail(&error.to_string());
             return;
@@ -357,6 +378,10 @@ fn process(app: &Arc<App>, released: Released, take: u64) {
             return;
         }
         Err(error) => {
+            // The result may still finish. It's offered for copying if it does.
+            if let Some(tracked) = tracked {
+                tracked.keep();
+            }
             app.fail(&error.to_string());
             return;
         }
@@ -375,6 +400,8 @@ fn process(app: &Arc<App>, released: Released, take: u64) {
     // The pill shows "Pasted" now, not after the receipt round trip.
     drop(busy);
     drop(ticket);
+    // Delivered, so a quit during the receipt can't offer it again.
+    drop(tracked);
     log!("take: {generation} delivery {status}");
     if let Err(error) = api.delivery(&generation, status, &message) {
         log!("take: could not report delivery for {generation}: {error}");

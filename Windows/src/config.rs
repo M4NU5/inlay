@@ -5,7 +5,8 @@ use crate::microphones::{Microphones, Selection};
 use serde::{Deserialize, Serialize};
 use std::net::Ipv6Addr;
 use std::path::PathBuf;
-use std::{env, fs, io};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{env, fs, io, thread};
 use url::{Host, Url};
 
 pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8391";
@@ -36,6 +37,10 @@ pub struct Config {
     /// takes text.
     #[serde(default)]
     pub preserve_clipboard: bool,
+    /// The saved file couldn't be read, so this run must never replace it:
+    /// it holds the device ID the server knows this PC by.
+    #[serde(skip)]
+    unreadable: bool,
 }
 
 fn default_hotkey() -> String {
@@ -47,9 +52,15 @@ fn default_trigger() -> String {
 }
 
 /// `INLAY_CLIENT_DATA_DIR` isolates development runs, as on the Mac client.
+/// It is made absolute and normalized, because the credential target and the
+/// single-instance mutex are named after it.
 pub fn data_dir() -> PathBuf {
     if let Some(directory) = env::var_os("INLAY_CLIENT_DATA_DIR") {
-        return PathBuf::from(directory);
+        let directory = PathBuf::from(directory);
+        return std::path::absolute(&directory)
+            .unwrap_or(directory)
+            .components()
+            .collect();
     }
     let base = env::var_os("APPDATA").map_or_else(|| PathBuf::from("."), PathBuf::from);
     base.join("Inlay")
@@ -57,7 +68,9 @@ pub fn data_dir() -> PathBuf {
 
 impl Config {
     /// Loads saved settings. The first run creates them with a new device ID.
-    /// An unreadable file is left alone so its device identity is not lost.
+    /// A file that can't be read is left alone for this whole run, so its
+    /// device identity is not lost. An invalid one is moved aside, keeping
+    /// its device ID for anyone who wants it back, and Inlay starts afresh.
     pub fn load() -> Config {
         let path = data_dir().join("config.json");
         let defaults = || Config {
@@ -70,8 +83,31 @@ impl Config {
             activation_mode: default_trigger(),
             mute_output_while_recording: false,
             preserve_clipboard: false,
+            unreadable: false,
         };
-        match fs::read(&path) {
+        let unreadable = || Config {
+            unreadable: true,
+            ..defaults()
+        };
+        let create = || {
+            let config = defaults();
+            if let Err(error) = config.save() {
+                log!("config: could not create {}: {error}", path.display());
+            }
+            config
+        };
+        // Antivirus or a sync app may hold the file for a moment at login.
+        let mut read = fs::read(&path);
+        for _ in 0..10 {
+            match &read {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                    thread::sleep(Duration::from_millis(100));
+                    read = fs::read(&path);
+                }
+                _ => break,
+            }
+        }
+        match read {
             Ok(bytes) => match serde_json::from_slice::<Config>(&bytes) {
                 Ok(mut config) => {
                     config.microphones = config.microphones.normalized();
@@ -79,20 +115,37 @@ impl Config {
                     config
                 }
                 Err(error) => {
-                    log!(
-                        "config: {} is invalid ({error}); using defaults without saving",
-                        path.display()
-                    );
-                    defaults()
+                    let seconds = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |since| since.as_secs());
+                    let aside = path.with_file_name(format!("config.invalid-{seconds}.json"));
+                    match fs::rename(&path, &aside) {
+                        Ok(()) => {
+                            log!(
+                                "config: {} is invalid ({error}); moved it to {} and started afresh",
+                                path.display(),
+                                aside.display()
+                            );
+                            create()
+                        }
+                        Err(move_error) => {
+                            log!(
+                                "config: {} is invalid ({error}) and can't be moved aside ({move_error}); using defaults without saving",
+                                path.display()
+                            );
+                            unreadable()
+                        }
+                    }
                 }
             },
-            Err(_) => {
-                let config = defaults();
-                if let Err(error) = config.save() {
-                    log!("config: could not create {}: {error}", path.display());
-                }
-                config
+            Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                log!(
+                    "config: cannot read {} ({error}); using defaults without saving",
+                    path.display()
+                );
+                unreadable()
             }
+            Err(_) => create(),
         }
     }
 
@@ -116,6 +169,11 @@ impl Config {
     }
 
     pub fn save(&self) -> io::Result<()> {
+        if self.unreadable {
+            return Err(io::Error::other(
+                "config.json couldn't be read when Inlay started, so Inlay won't replace it. Fix or remove the file, then restart Inlay",
+            ));
+        }
         let directory = data_dir();
         fs::create_dir_all(&directory)?;
         let temporary = directory.join("config.json.tmp");
