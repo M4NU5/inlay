@@ -126,7 +126,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_REFRESH => {
             update_icon(window);
-            menu::set_header(window, header(app::shared()));
+            menu::update(window, header(app::shared()), entries(app::shared()));
             settings::refresh();
             overlay::update();
             0
@@ -134,7 +134,7 @@ unsafe extern "system" fn window_proc(
         WM_TIMER => {
             unsafe { KillTimer(window, NOTICE_TIMER) };
             update_icon(window);
-            menu::set_header(window, header(app::shared()));
+            menu::update(window, header(app::shared()), entries(app::shared()));
             0
         }
         WM_NOTIFY_ERROR => {
@@ -312,6 +312,17 @@ fn show_menu(window: HWND) {
         return;
     }
     let app = app::shared();
+    menu::show(
+        window,
+        Some(header(app)),
+        entries(app),
+        px(240),
+        Anchor::Cursor,
+    );
+}
+
+/// The menu's items for the app's state now.
+fn entries(app: &App) -> Vec<Entry> {
     let busy = app.busy();
     let has_transcript = app.status(|status| {
         status
@@ -335,7 +346,7 @@ fn show_menu(window: HWND) {
         Entry::Separator,
         item(ID_QUIT, "Quit Inlay", true),
     ]);
-    menu::show(window, Some(header(app)), entries, px(240), Anchor::Cursor);
+    entries
 }
 
 fn quit(window: HWND) {

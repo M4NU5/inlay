@@ -8,6 +8,7 @@
 use crate::hotkey::{self, INJECTED_MARKER};
 use crate::win::{from_wide, wide};
 use std::ptr::{null, null_mut};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 use windows::Win32::System::Com::{
@@ -77,6 +78,7 @@ pub fn paste(
     never_copy: bool,
     sent: impl FnOnce(Delivered),
 ) -> Result<Delivered, String> {
+    let _turn = turn();
     // With `never_copy`, the field is found before staging, so a transcript
     // with nowhere to go never reaches the clipboard.
     let found = never_copy.then(|| unsafe { GetForegroundWindow() });
@@ -108,7 +110,7 @@ pub fn paste(
             restore(&saved, text);
             return Err(nowhere());
         }
-        copy(text)?;
+        copy_now(text)?;
         log!("paste: no text field has focus, so the transcript was copied");
         sent(Delivered::Copied);
         return Ok(Delivered::Copied);
@@ -135,9 +137,23 @@ fn nowhere() -> String {
 }
 
 /// Leaves `text` on the clipboard, where clipboard history may keep it.
+/// Waits for a paste in progress to finish first.
 pub fn copy(text: &str) -> Result<(), String> {
+    let _turn = turn();
+    copy_now(text)
+}
+
+fn copy_now(text: &str) -> Result<(), String> {
     let _clipboard = Clipboard::open()?;
     write_text(text, false).map_err(|(error, _)| error)
+}
+
+/// One clipboard job at a time: a whole paste, from staging the transcript to
+/// putting the old contents back, or a copy. A copy landing mid-paste could
+/// be pasted in place of the transcript, or erased when the paste restores.
+fn turn() -> MutexGuard<'static, ()> {
+    static TURN: Mutex<()> = Mutex::new(());
+    TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Opens the clipboard for one operation, owned by a short-lived message-only
