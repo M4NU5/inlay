@@ -86,13 +86,19 @@ pub fn paste(
     {
         return Err(nowhere());
     }
-    let saved = snapshot()?;
-    if let Err((error, emptied)) = write_text(text, true) {
-        if let Some(emptied) = emptied {
-            restore(&saved, emptied, text);
+    // Saved and staged in one clipboard session, so nothing copied in between is lost.
+    let saved = {
+        let _clipboard = Clipboard::open()?;
+        let saved = snapshot();
+        if let Err((error, emptied)) = write_text(text, true) {
+            if emptied {
+                put_back(&saved);
+            }
+            return Err(error);
         }
-        return Err(error);
-    }
+        saved
+    };
+    // Closing the clipboard can advance the sequence number, so read it after.
     let staged = unsafe { GetClipboardSequenceNumber() };
     // Checked after the clipboard work, which can wait on other apps. The
     // check itself can take a moment, so the window must still be in front.
@@ -133,6 +139,7 @@ fn nowhere() -> String {
 
 /// Leaves `text` on the clipboard, where clipboard history may keep it.
 pub fn copy(text: &str) -> Result<(), String> {
+    let _clipboard = Clipboard::open()?;
     write_text(text, false).map_err(|(error, _)| error)
 }
 
@@ -186,9 +193,8 @@ impl Drop for Clipboard {
 }
 
 /// Copies every format that is plain global memory: text, HTML, RTF, file
-/// lists and images (as CF_DIB/CF_DIBV5).
-fn snapshot() -> Result<Vec<(u32, Vec<u8>)>, String> {
-    let _clipboard = Clipboard::open()?;
+/// lists and images (as CF_DIB/CF_DIBV5). Must run while the clipboard is open.
+fn snapshot() -> Vec<(u32, Vec<u8>)> {
     let mut formats = Vec::new();
     let mut format = 0;
     loop {
@@ -216,7 +222,7 @@ fn snapshot() -> Result<Vec<(u32, Vec<u8>)>, String> {
             GlobalUnlock(handle);
         }
     }
-    Ok(formats)
+    formats
 }
 
 fn copyable(format: u32) -> bool {
@@ -245,22 +251,20 @@ fn copyable(format: u32) -> bool {
     !matches!(name.as_str(), "DataObject" | "Ole Private Data")
 }
 
-/// `private` adds the markers that keep the staged transcript out of clipboard
-/// history, cloud clipboard and clipboard managers. A failure after emptying
-/// the clipboard also gives its sequence number then, so the caller can put
-/// back what was there.
-fn write_text(text: &str, private: bool) -> Result<(), (String, Option<u32>)> {
+/// Must run while the clipboard is open. `private` adds the markers that keep
+/// the staged transcript out of clipboard history, cloud clipboard and
+/// clipboard managers. A failure says whether the clipboard was already
+/// emptied, so the caller can put back what was there.
+fn write_text(text: &str, private: bool) -> Result<(), (String, bool)> {
     let units = clipboard_text(text);
     let bytes: Vec<u8> = units.iter().flat_map(|unit| unit.to_le_bytes()).collect();
-    let _clipboard = Clipboard::open().map_err(|error| (error, None))?;
     if unsafe { EmptyClipboard() } == 0 {
         return Err((
             "Windows would not let Inlay use the clipboard.".into(),
-            None,
+            false,
         ));
     }
-    set(u32::from(CF_UNICODETEXT), &bytes)
-        .map_err(|error| (error, Some(unsafe { GetClipboardSequenceNumber() })))?;
+    set(u32::from(CF_UNICODETEXT), &bytes).map_err(|error| (error, true))?;
     if private {
         let markers = [
             ("ExcludeClipboardContentFromMonitorProcessing", 1u32),
@@ -342,13 +346,18 @@ fn restore(saved: &[(u32, Vec<u8>)], staged: u32, text: &str) {
             log!("paste: clipboard changed after staging; leaving the newer contents");
             return;
         }
-        unsafe { EmptyClipboard() };
-        for (format, bytes) in saved {
-            let _ = set(*format, bytes);
-        }
+        put_back(saved);
         return;
     }
     log!("paste: another app held the clipboard, so its previous contents couldn't be put back");
+}
+
+/// Must run while the clipboard is open.
+fn put_back(saved: &[(u32, Vec<u8>)]) {
+    unsafe { EmptyClipboard() };
+    for (format, bytes) in saved {
+        let _ = set(*format, bytes);
+    }
 }
 
 /// Whether the focused control takes typed text: a console, a control showing

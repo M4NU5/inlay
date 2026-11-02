@@ -178,11 +178,13 @@ impl App {
     pub fn save_connection(&self, connection: Settings) -> Result<(), String> {
         {
             let mut settings = lock(&self.settings);
+            let previous = credentials::read(&connection.config.endpoint);
             credentials::write(&connection.config.endpoint, &connection.token)?;
-            connection
-                .config
-                .save()
-                .map_err(|error| format!("Could not save settings: {error}"))?;
+            if let Err(error) = connection.config.save() {
+                // Keep the saved token in step with the settings still running.
+                let _ = credentials::write(&connection.config.endpoint, &previous);
+                return Err(format!("Could not save settings: {error}"));
+            }
             hotkey::apply(&connection.config);
             self.pending.keep_only(&connection.config.endpoint);
             *settings = connection;

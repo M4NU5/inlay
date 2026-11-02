@@ -47,9 +47,15 @@ fn default_trigger() -> String {
 }
 
 /// `INLAY_CLIENT_DATA_DIR` isolates development runs, as on the Mac client.
+/// It is made absolute and normalized, because the credential target and the
+/// single-instance mutex are named after it.
 pub fn data_dir() -> PathBuf {
     if let Some(directory) = env::var_os("INLAY_CLIENT_DATA_DIR") {
-        return PathBuf::from(directory);
+        let directory = PathBuf::from(directory);
+        return std::path::absolute(&directory)
+            .unwrap_or(directory)
+            .components()
+            .collect();
     }
     let base = env::var_os("APPDATA").map_or_else(|| PathBuf::from("."), PathBuf::from);
     base.join("Inlay")
@@ -57,7 +63,7 @@ pub fn data_dir() -> PathBuf {
 
 impl Config {
     /// Loads saved settings. The first run creates them with a new device ID.
-    /// An unreadable file is left alone so its device identity is not lost.
+    /// An unreadable or invalid file is left alone so its device identity is not lost.
     pub fn load() -> Config {
         let path = data_dir().join("config.json");
         let defaults = || Config {
@@ -86,6 +92,13 @@ impl Config {
                     defaults()
                 }
             },
+            Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                log!(
+                    "config: cannot read {} ({error}); using defaults without saving",
+                    path.display()
+                );
+                defaults()
+            }
             Err(_) => {
                 let config = defaults();
                 if let Err(error) = config.save() {

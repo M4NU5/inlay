@@ -23,7 +23,7 @@ use crate::pending::Finished;
 use crate::privacy;
 use crate::theme::{self, Font, px, rect};
 use crate::win::{from_wide, wide};
-use crate::{audio, config, hotkey, startup, tray};
+use crate::{audio, config, credentials, hotkey, startup, tray};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
@@ -272,6 +272,7 @@ const PICK_MICROPHONE: usize = 1000;
 const PICK_PROFILE: usize = 1400;
 /// Rename list, then Delete list.
 const PICK_LIST: usize = 1800;
+const _: () = assert!(PICK_PROFILE + crate::microphones::MAX_PROFILES <= PICK_LIST);
 const PICK_HOTKEY: usize = 2000;
 const PICK_TRIGGER: usize = 2500;
 const PICK_DEVICE: usize = 3000;
@@ -1106,10 +1107,19 @@ fn say(message: Option<Message>) {
 fn connect(window: HWND) {
     let result = (|| {
         let endpoint = config::normalize_endpoint(&text(window, ENDPOINT))?;
-        let token = config::validate_token(&text(window, TOKEN))?;
+        let typed = config::validate_token(&text(window, TOKEN))?;
         let name = config::validate_device_name(&text(window, NAME))?;
         let app = app::shared();
         let mut settings = app.settings();
+        // A new address gets the token saved for it, never the old server's,
+        // unless a different one was typed.
+        let token = if endpoint != settings.config.endpoint && typed == settings.token {
+            let saved = credentials::read(&endpoint);
+            set_text(window, TOKEN, &saved);
+            saved
+        } else {
+            typed
+        };
         settings.config.endpoint = endpoint;
         settings.config.device_name = name;
         settings.token = token;

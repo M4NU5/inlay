@@ -360,7 +360,10 @@ enum Body<'a> {
 }
 
 impl Api {
+    /// Validates the address here too, so a hand-edited config can't send the
+    /// token over plain HTTP to a LAN address.
     pub fn new(endpoint: &str, token: &str) -> Result<Api, String> {
+        let base = crate::config::normalize_endpoint(endpoint)?;
         let tls = native_tls::TlsConnector::new()
             .map_err(|error| format!("TLS is unavailable: {error}"))?;
         let agent = ureq::AgentBuilder::new()
@@ -373,7 +376,7 @@ impl Api {
             .tls_connector(Arc::new(tls))
             .build();
         Ok(Api {
-            base: endpoint.trim_end_matches('/').to_string(),
+            base,
             token: token.to_string(),
             agent,
         })
