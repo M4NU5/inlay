@@ -31,7 +31,9 @@ pub fn build(page: &mut Builder, context: &Context) {
     page.gap(26);
 
     if let Some(finished) = &context.finished {
-        let copy = Control::button("Copy").with_icon(Icon::Copy);
+        let copy = Control::button("Copy")
+            .with_icon(Icon::Copy)
+            .enabled(!context.recording && !context.processing);
         page.status(
             theme::ORANGE,
             "A dictation finished without being pasted.",

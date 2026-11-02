@@ -327,8 +327,18 @@ impl App {
         });
     }
 
+    /// A take is recording or on its way to a paste. Copying meanwhile could
+    /// land between a take staging its text and the app reading it, so the
+    /// copy actions wait, as on the Mac.
+    pub fn busy(&self) -> bool {
+        self.status(|status| status.recording || status.processing > 0)
+    }
+
     /// Copies the last dictation, from the tray menu or the Dictation page.
     pub fn copy_last(&self) {
+        if self.busy() {
+            return;
+        }
         let Some(text) = self
             .status(|status| status.last.as_ref().map(|last| last.text.clone()))
             .filter(|text| !text.is_empty())
@@ -351,6 +361,9 @@ impl App {
     /// Copies a dictation that finished with no take left to paste it, then
     /// tells the server, as the Mac does.
     pub fn copy_finished(&self) {
+        if self.busy() {
+            return;
+        }
         let Some(finished) = self.pending.finished() else {
             return;
         };

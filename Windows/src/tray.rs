@@ -312,6 +312,7 @@ fn show_menu(window: HWND) {
         return;
     }
     let app = app::shared();
+    let busy = app.busy();
     let has_transcript = app.status(|status| {
         status
             .last
@@ -326,10 +327,10 @@ fn show_menu(window: HWND) {
     };
     let mut entries = Vec::new();
     if app.pending.finished().is_some() {
-        entries.push(item(ID_FINISHED, "Copy finished dictation", true));
+        entries.push(item(ID_FINISHED, "Copy finished dictation", !busy));
     }
     entries.extend([
-        item(ID_COPY, "Copy last message", has_transcript),
+        item(ID_COPY, "Copy last message", has_transcript && !busy),
         item(ID_OPEN, "Open Inlay…", true),
         Entry::Separator,
         item(ID_QUIT, "Quit Inlay", true),
