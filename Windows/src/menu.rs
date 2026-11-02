@@ -185,16 +185,21 @@ pub fn update(owner: HWND, header: Header, entries: Vec<Entry>) {
             return;
         };
         state.header = Some(header);
+        // The highlight follows its item, not its row, so Enter still runs
+        // the command it showed. It goes if the item went or turned off.
+        let hot = state.hot.and_then(|hot| match state.entries.get(hot) {
+            Some(Entry::Item { id, .. }) => Some(*id),
+            _ => None,
+        });
         state.entries = entries;
-        // The highlighted row may have gone or turned off.
-        state.hot = state.hot.filter(|&hot| {
-            matches!(
-                state.entries.get(hot),
-                Some(Entry::Item { enabled: true, .. })
+        state.hot = hot.and_then(|hot| {
+            state.entries.iter().position(
+                |entry| matches!(entry, Entry::Item { id, enabled: true, .. } if *id == hot),
             )
         });
         state.view = layout(state).height.min(work.bottom - work.top);
         scroll(state, 0);
+        reveal(state);
         (state.view, state.above)
     };
     unsafe {

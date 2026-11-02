@@ -8,7 +8,7 @@
 use crate::hotkey::{self, INJECTED_MARKER};
 use crate::win::{from_wide, wide};
 use std::ptr::{null, null_mut};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::Duration;
 use windows::Win32::System::Com::{
@@ -137,9 +137,16 @@ fn nowhere() -> String {
 }
 
 /// Leaves `text` on the clipboard, where clipboard history may keep it.
-/// Waits for a paste in progress to finish first.
+/// Refuses during a paste rather than wait for it: copies come from the
+/// window and tray, which must not freeze.
 pub fn copy(text: &str) -> Result<(), String> {
-    let _turn = turn();
+    let _turn = match TURN.try_lock() {
+        Ok(turn) => turn,
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => {
+            return Err("Inlay is pasting a dictation. Copy again in a moment.".into());
+        }
+    };
     copy_now(text)
 }
 
@@ -151,8 +158,9 @@ fn copy_now(text: &str) -> Result<(), String> {
 /// One clipboard job at a time: a whole paste, from staging the transcript to
 /// putting the old contents back, or a copy. A copy landing mid-paste could
 /// be pasted in place of the transcript, or erased when the paste restores.
+static TURN: Mutex<()> = Mutex::new(());
+
 fn turn() -> MutexGuard<'static, ()> {
-    static TURN: Mutex<()> = Mutex::new(());
     TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
