@@ -19,6 +19,7 @@ use crate::controller::Event;
 use crate::icons::Look as TrayLook;
 use crate::menu::{self, Anchor, Entry};
 use crate::microphones::Input;
+use crate::pending::Finished;
 use crate::privacy;
 use crate::theme::{self, Font, px, rect};
 use crate::win::{from_wide, wide};
@@ -114,6 +115,8 @@ pub struct Context {
     /// A test take is recording or transcribing.
     pub test_busy: bool,
     pub last: Option<Dictation>,
+    /// A dictation that finished with no take left to paste it.
+    pub finished: Option<Finished>,
     pub error: Option<String>,
     /// The latest test's transcript, or why it stopped without one.
     pub test: Option<Result<Dictation, String>>,
@@ -176,6 +179,7 @@ const TRIGGER: i32 = 171;
 const SHORTCUT_CHECK: i32 = 172;
 const CLIPBOARD: i32 = 173;
 const MIC_SETTINGS: i32 = 174;
+const COPY_FINISHED: i32 = 175;
 const HISTORY: i32 = 140;
 const DEVICE: i32 = 141;
 const SOURCE: i32 = 142;
@@ -218,9 +222,10 @@ const SLOTS: i32 = 30000;
 /// Server preferences' dictionary controls, made as they are shown: `DYNAMIC + slot`.
 const DYNAMIC: i32 = 40000;
 const EDITS: [i32; 3] = [ENDPOINT, TOKEN, NAME];
-const BUTTONS: [i32; 42] = [
+const BUTTONS: [i32; 43] = [
     CHECK,
     COPY,
+    COPY_FINISHED,
     TEST,
     HISTORY,
     GEAR,
@@ -583,6 +588,7 @@ fn context() -> Context {
         processing: status.processing > 0,
         test_busy: status.tests > 0,
         last: status.last.clone(),
+        finished: None,
         error: status.error.clone(),
         test: status.test.clone(),
         inputs: Vec::new(),
@@ -592,6 +598,7 @@ fn context() -> Context {
         checking: status.checking.is_some(),
         check_lines: status.check_lines.clone(),
     });
+    context.finished = app.pending.finished();
     let state = state();
     context.inputs = state.inputs.clone();
     context.default_input = state.default_input.clone();
@@ -1153,6 +1160,7 @@ fn command(window: HWND, id: i32) {
     match id {
         CHECK => app.recheck(),
         COPY => app.copy_last(),
+        COPY_FINISHED => app.copy_finished(),
         TEST => {
             let _ = app.events.send(Event::Test);
         }

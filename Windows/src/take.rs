@@ -87,6 +87,7 @@ pub fn start(id: u64, app: Arc<App>, test: bool) -> Handle {
 /// A take whose microphone has stopped. Its uploads may still be draining.
 struct Released {
     api: Api,
+    endpoint: String,
     generation: String,
     uploader: JoinHandle<Result<u64, ApiError>>,
     keep_original: bool,
@@ -208,6 +209,7 @@ fn record(
     );
     Some(Released {
         api,
+        endpoint: settings.config.endpoint,
         generation,
         uploader,
         keep_original,
@@ -304,6 +306,7 @@ fn process(app: &Arc<App>, released: Released, take: u64) {
     let busy = app.processing();
     let Released {
         api,
+        endpoint,
         generation,
         uploader,
         keep_original,
@@ -323,12 +326,18 @@ fn process(app: &Arc<App>, released: Released, take: u64) {
             return;
         }
     };
-    let finished = match api.finish(&generation, frames, keep_original.then_some(frames)) {
+    let original = keep_original.then_some(frames);
+    // Saved first: the server may seal it even if its answer never arrives.
+    // A test's result only matters while its page waits for it.
+    let tracked = (!test).then(|| app.pending.track(&generation, &endpoint, frames, original));
+    let finished = match api.finish(&generation, frames, original) {
         Ok(record) => record,
         Err(error) => {
             // Only a definite rejection proves the server did not seal it.
             if error.is_definite_rejection() {
                 cancel_quietly(&api, &generation);
+            } else if let Some(tracked) = tracked {
+                tracked.keep();
             }
             app.fail(&error.to_string());
             return;
@@ -357,6 +366,10 @@ fn process(app: &Arc<App>, released: Released, take: u64) {
             return;
         }
         Err(error) => {
+            // The result may still finish. It's offered for copying if it does.
+            if let Some(tracked) = tracked {
+                tracked.keep();
+            }
             app.fail(&error.to_string());
             return;
         }

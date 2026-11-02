@@ -197,10 +197,16 @@ pub struct Generation {
     pub insertion_text: String,
     #[serde(default)]
     pub preview_text: String,
+    /// The whole transcript, which a result found later is copied as.
+    #[serde(default)]
+    pub final_text: String,
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]
     pub continuation: Option<Value>,
+    /// The client's receipt. None until some client reports one.
+    #[serde(default)]
+    pub delivery: Option<Value>,
 }
 
 impl Generation {

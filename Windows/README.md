@@ -17,6 +17,7 @@ Details:
 - Takes shorter than 0.25 seconds are discarded. Takes stop at the server's 3-minute limit.
 - You can start a new take while earlier ones are still transcribing. Pastes happen in release order, and never while the key is held.
 - If the text doesn't appear, open the tray menu and choose **Copy last message**, then paste it yourself. The **Dictation** page shows the last result too, with **Copy**.
+- If Inlay quits or loses the server while a take is transcribing, the result isn't lost. Once it finishes, the tray menu offers **Copy finished dictation** and the **Dictation** page shows it with **Copy**. Inlay never pastes it, because the cursor has moved on.
 - **Test microphone**, on the Dictation and Microphone pages, records until you select **Finish dictation**. It shows the transcript without pasting it.
 
 | Tray icon            | Meaning                                                   |
@@ -81,6 +82,7 @@ Choose **Open Inlay…** from the tray menu. The window follows the Mac app: a s
 Files:
 
 - `%APPDATA%\Inlay\config.json` holds the server address, a stable device ID, the device name, the microphone and the hold key.
+- `%APPDATA%\Inlay\pending-generations.json` lists takes that were sent for transcription but not yet delivered, with their IDs and audio lengths. It never holds text. Entries go once they are delivered, copied, or a week old.
 - `%APPDATA%\Inlay\inlay.log` records events and errors. It never records transcripts, tokens or audio.
 - Set `INLAY_CLIENT_DATA_DIR` to use another folder, for example for a test copy. The token is scoped to the folder too.
 - The server lists each enrolled PC under its device ID. The Mac app's device list can revoke it.

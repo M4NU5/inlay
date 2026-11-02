@@ -34,6 +34,7 @@ const NOTICE_TIMER: usize = 1;
 const ID_COPY: usize = 11;
 const ID_OPEN: usize = 12;
 const ID_QUIT: usize = 13;
+const ID_FINISHED: usize = 14;
 
 /// Asks the UI thread to redraw the icon and tooltip. Safe from any thread.
 pub fn refresh() {
@@ -143,6 +144,7 @@ unsafe extern "system" fn window_proc(
         WM_COMMAND => {
             match wparam & 0xFFFF {
                 ID_COPY => app::shared().copy_last(),
+                ID_FINISHED => app::shared().copy_finished(),
                 ID_OPEN => settings::open(settings::Page::Dictation),
                 ID_QUIT => quit(window),
                 _ => {}
@@ -322,12 +324,16 @@ fn show_menu(window: HWND) {
         enabled,
         checked: false,
     };
-    let entries = vec![
+    let mut entries = Vec::new();
+    if app.pending.finished().is_some() {
+        entries.push(item(ID_FINISHED, "Copy finished dictation", true));
+    }
+    entries.extend([
         item(ID_COPY, "Copy last message", has_transcript),
         item(ID_OPEN, "Open Inlay…", true),
         Entry::Separator,
         item(ID_QUIT, "Quit Inlay", true),
-    ];
+    ]);
     menu::show(window, Some(header(app)), entries, px(240), Anchor::Cursor);
 }
 

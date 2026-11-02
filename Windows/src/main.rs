@@ -17,6 +17,7 @@ mod microphones;
 mod mute;
 mod overlay;
 mod paste;
+mod pending;
 mod privacy;
 mod settings;
 mod startup;
