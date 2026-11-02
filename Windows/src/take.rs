@@ -75,6 +75,9 @@ pub fn start(id: u64, app: Arc<App>, test: bool) -> Handle {
         .spawn(move || {
             let _test = test_take;
             let released = record(&app, &inbox, &own, id, test);
+            // A release that came after the time limit left a ticket queued.
+            // Dropping it now lets the takes behind this one paste.
+            drop(inbox);
             app.set_recording(id, false, test);
             let _ = app.events.send(Event::TakeEnded(id));
             if let Some(released) = released {
@@ -397,6 +400,8 @@ fn process(app: &Arc<App>, released: Released, take: u64) {
     // The pill shows "Pasted" now, not after the receipt round trip.
     drop(busy);
     drop(ticket);
+    // Delivered, so a quit during the receipt can't offer it again.
+    drop(tracked);
     log!("take: {generation} delivery {status}");
     if let Err(error) = api.delivery(&generation, status, &message) {
         log!("take: could not report delivery for {generation}: {error}");

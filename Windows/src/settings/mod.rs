@@ -35,8 +35,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, EM_SETMARGINS, ODS_FOCUS, ODS_NOFOCUSRECT, ODS_SELECTED, SetWindowTheme,
-    WM_MOUSELEAVE,
+    DRAWITEMSTRUCT, EM_GETMODIFY, EM_SETMARGINS, EM_SETMODIFY, ODS_FOCUS, ODS_NOFOCUSRECT,
+    ODS_SELECTED, SetWindowTheme, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, IsWindowEnabled, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
@@ -1112,8 +1112,11 @@ fn connect(window: HWND) {
         let app = app::shared();
         let mut settings = app.settings();
         // A new address gets the token saved for it, never the old server's,
-        // unless a different one was typed.
-        let token = if endpoint != settings.config.endpoint && typed == settings.token {
+        // unless one was typed or pasted since the box was last filled.
+        let edited = unsafe { SendMessageW(GetDlgItem(window, TOKEN), EM_GETMODIFY, 0, 0) } != 0;
+        let moved =
+            config::normalize_endpoint(&settings.config.endpoint).ok() != Some(endpoint.clone());
+        let token = if moved && !edited {
             let saved = credentials::read(&endpoint);
             set_text(window, TOKEN, &saved);
             saved
@@ -1132,6 +1135,8 @@ fn connect(window: HWND) {
             // Show the address as saved, without a trailing slash.
             let saved = app::shared().settings().config.endpoint;
             set_text(window, ENDPOINT, &saved);
+            // The token is saved for this address now, so it no longer counts as typed.
+            unsafe { SendMessageW(GetDlgItem(window, TOKEN), EM_SETMODIFY, 0, 0) };
             say(None);
         }
         Err(text) => say(Some(Message { text, error: true })),
