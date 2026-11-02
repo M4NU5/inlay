@@ -5,7 +5,7 @@ use crate::microphones::{Microphones, Selection};
 use serde::{Deserialize, Serialize};
 use std::net::Ipv6Addr;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io, thread};
 use url::{Host, Url};
 
@@ -68,8 +68,9 @@ pub fn data_dir() -> PathBuf {
 
 impl Config {
     /// Loads saved settings. The first run creates them with a new device ID.
-    /// An unreadable or invalid file is left alone, for this whole run, so its
-    /// device identity is not lost.
+    /// A file that can't be read is left alone for this whole run, so its
+    /// device identity is not lost. An invalid one is moved aside, keeping
+    /// its device ID for anyone who wants it back, and Inlay starts afresh.
     pub fn load() -> Config {
         let path = data_dir().join("config.json");
         let defaults = || Config {
@@ -87,6 +88,13 @@ impl Config {
         let unreadable = || Config {
             unreadable: true,
             ..defaults()
+        };
+        let create = || {
+            let config = defaults();
+            if let Err(error) = config.save() {
+                log!("config: could not create {}: {error}", path.display());
+            }
+            config
         };
         // Antivirus or a sync app may hold the file for a moment at login.
         let mut read = fs::read(&path);
@@ -107,11 +115,27 @@ impl Config {
                     config
                 }
                 Err(error) => {
-                    log!(
-                        "config: {} is invalid ({error}); using defaults without saving",
-                        path.display()
-                    );
-                    unreadable()
+                    let seconds = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |since| since.as_secs());
+                    let aside = path.with_file_name(format!("config.invalid-{seconds}.json"));
+                    match fs::rename(&path, &aside) {
+                        Ok(()) => {
+                            log!(
+                                "config: {} is invalid ({error}); moved it to {} and started afresh",
+                                path.display(),
+                                aside.display()
+                            );
+                            create()
+                        }
+                        Err(move_error) => {
+                            log!(
+                                "config: {} is invalid ({error}) and can't be moved aside ({move_error}); using defaults without saving",
+                                path.display()
+                            );
+                            unreadable()
+                        }
+                    }
                 }
             },
             Err(error) if error.kind() != io::ErrorKind::NotFound => {
@@ -121,13 +145,7 @@ impl Config {
                 );
                 unreadable()
             }
-            Err(_) => {
-                let config = defaults();
-                if let Err(error) = config.save() {
-                    log!("config: could not create {}: {error}", path.display());
-                }
-                config
-            }
+            Err(_) => create(),
         }
     }
 

@@ -20,8 +20,7 @@ use windows::Win32::UI::Accessibility::{
 use windows_sys::Win32::Foundation::{GlobalFree, HWND};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
-    GetClipboardFormatNameW, GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW,
-    SetClipboardData,
+    GetClipboardFormatNameW, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{
@@ -98,8 +97,6 @@ pub fn paste(
         }
         saved
     };
-    // Closing the clipboard can advance the sequence number, so read it after.
-    let staged = unsafe { GetClipboardSequenceNumber() };
     // Checked after the clipboard work, which can wait on other apps. The
     // check itself can take a moment, so the window must still be in front.
     let target = unsafe { GetForegroundWindow() };
@@ -108,7 +105,7 @@ pub fn paste(
         && unsafe { GetForegroundWindow() } == target;
     if !focused {
         if never_copy {
-            restore(&saved, staged, text);
+            restore(&saved, text);
             return Err(nowhere());
         }
         copy(text)?;
@@ -119,7 +116,7 @@ pub fn paste(
     let terminal = is_terminal(target);
     release_modifiers();
     if !send_paste(terminal) {
-        restore(&saved, staged, text);
+        restore(&saved, text);
         return Err("Windows blocked the paste keystroke.".into());
     }
     log!(
@@ -128,7 +125,7 @@ pub fn paste(
     );
     sent(Delivered::Pasted);
     thread::sleep(RESTORE_DELAY);
-    restore(&saved, staged, text);
+    restore(&saved, text);
     Ok(Delivered::Pasted)
 }
 
@@ -333,16 +330,17 @@ fn set(format: u32, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Takes `text` back off the clipboard and puts the saved contents back,
-/// unless something newer was copied meanwhile. The transcript copied again,
-/// as some clipboard managers do, isn't newer. Waits a while for an app
-/// holding the clipboard, so the transcript isn't left in place of the user's
-/// own contents.
-fn restore(saved: &[(u32, Vec<u8>)], staged: u32, text: &str) {
+/// unless something else was copied meanwhile. Only the transcript itself is
+/// replaced, so it doesn't matter when another app copied, and the transcript
+/// copied again, as some clipboard managers do, still counts as Inlay's.
+/// Waits a while for an app holding the clipboard, so the transcript isn't
+/// left in place of the user's own contents.
+fn restore(saved: &[(u32, Vec<u8>)], text: &str) {
     for _ in 0..RESTORE_ATTEMPTS {
         let Ok(_clipboard) = Clipboard::open() else {
             continue;
         };
-        if unsafe { GetClipboardSequenceNumber() } != staged && !holds(text) {
+        if !holds(text) {
             log!("paste: clipboard changed after staging; leaving the newer contents");
             return;
         }

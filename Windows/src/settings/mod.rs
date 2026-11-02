@@ -1111,17 +1111,24 @@ fn connect(window: HWND) {
         let name = config::validate_device_name(&text(window, NAME))?;
         let app = app::shared();
         let mut settings = app.settings();
-        // A new address gets the token saved for it, never the old server's,
-        // unless one was typed or pasted since the box was last filled.
+        // Unless a token was typed or pasted since the box was last filled,
+        // use the one saved for the address being connected to. The box may
+        // still show another server's token, for example after a failed switch.
         let edited = unsafe { SendMessageW(GetDlgItem(window, TOKEN), EM_GETMODIFY, 0, 0) } != 0;
-        let moved =
-            config::normalize_endpoint(&settings.config.endpoint).ok() != Some(endpoint.clone());
-        let token = if moved && !edited {
-            let saved = credentials::read(&endpoint);
+        let token = if edited {
+            typed
+        } else {
+            let same = config::normalize_endpoint(&settings.config.endpoint)
+                .ok()
+                .as_ref()
+                == Some(&endpoint);
+            let saved = if same {
+                settings.token.clone()
+            } else {
+                credentials::read(&endpoint)
+            };
             set_text(window, TOKEN, &saved);
             saved
-        } else {
-            typed
         };
         settings.config.endpoint = endpoint;
         settings.config.device_name = name;

@@ -81,7 +81,7 @@ Choose **Open Inlay…** from the tray menu. The window follows the Mac app: a s
 
 Files:
 
-- `%APPDATA%\Inlay\config.json` holds the server address, a stable device ID, the device name, the microphone and the hold key.
+- `%APPDATA%\Inlay\config.json` holds the server address, a stable device ID, the device name, the microphone and the hold key. If it isn't valid JSON, Inlay moves it to `config.invalid-<time>.json`, keeping its device ID, and starts afresh. If it can't be read at all, Inlay leaves it alone and won't save settings until it is restarted.
 - `%APPDATA%\Inlay\pending-generations.json` lists takes that were sent for transcription but not yet delivered, with their IDs and audio lengths. It never holds text. Entries go once they are delivered, copied, or a week old.
 - `%APPDATA%\Inlay\inlay.log` records events and errors. It never records transcripts, tokens or audio.
 - Set `INLAY_CLIENT_DATA_DIR` to use another folder, for example for a test copy. The token is scoped to the folder too.

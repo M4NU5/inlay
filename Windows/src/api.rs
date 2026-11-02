@@ -60,8 +60,10 @@ impl ApiError {
     }
 
     /// The server answered without sealing the recording, so cancelling is safe.
+    /// A refused credential proves nothing: a lost reply may have sealed it
+    /// before the credential was replaced.
     pub fn is_definite_rejection(&self) -> bool {
-        matches!(self, ApiError::Rejected { status, .. } if (400..500).contains(status) && !matches!(status, 408 | 429))
+        matches!(self, ApiError::Rejected { status, .. } if (400..500).contains(status) && !matches!(status, 401 | 403 | 408 | 429))
     }
 }
 
