@@ -149,12 +149,12 @@ sequenceDiagram
   G->>S: withStage("speech", unit)
   L->>L: createGeneration → gate closes
   Note over L: usually still talking (seconds)
-  S-->>M: unit done (hard wall-time cap)
+  S-->>M: unit done (target ≤ 1.5 s, not preemptible)
   L->>S: sealed take waits at most the rest of one unit
 ```
 
 - **Pause on `createGeneration`, not on seal.** A take starts when recording starts, so a running miner unit usually finishes while I'm still talking. It isn't guaranteed. Recordings can be as short as 0.25 s (`generation-service.ts:931`), and closing the gate doesn't preempt a unit already in the FIFO. The miner schedules no new units while any take is `receiving`, `queued`, `transcribing` or `proofreading`.
-- **Bounded units.** Each Parakeet unit is a crop of at most 10 s around a span, and has a hard wall-time budget (start at 1.5 s). Crops are sized from measured `transcribeMs`, so a unit that would exceed the budget is split or skipped. The worst-case live delay is the remainder of one unit **(unverified: measure `transcribeMs` for crops on the WSL CPU)**, and the live-impact metric tracks it. The miner never cancels a helper, because cancelling resets any active or loading helper and forces a model reload.
+- **Bounded units.** Each Parakeet unit is a crop of at most 10 s around a span, and targets 1.5 s of wall time. Crops are sized from measured `transcribeMs`. That is a prediction, not a cap: a unit in flight can't be stopped without resetting the shared helper, and `speechDeadline` allows far longer. So a slow outlier can delay a live take beyond 1.5 s. The miner records each unit's actual `transcribeMs`. When any unit overruns twice the target, it halves its crop size and pauses for the rest of the window. The live-impact metric reports the real delay **(unverified: measure crop `transcribeMs` on the WSL CPU)**. The miner never cancels a helper, because cancelling resets any active or loading helper and forces a model reload.
 - **Crops go through the existing WAV path.** The miner writes a temporary 16 kHz WAV under `miner/scratch/` and calls `inference.transcribe` like a live take. No new helper protocol is needed for Phase 3, apart from optional token detail.
 - **Budget.** A daily CPU-seconds cap and a run window (default: overnight, 01:00–07:00 local). Heavy jobs on WSL starve the daily Parakeet instance, so the default is to run when I'm asleep.
 - **Text stages** run in the miner `Worker` at any idle time. They are cheap but still yield to the gate.
