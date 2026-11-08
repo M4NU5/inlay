@@ -18,7 +18,7 @@ Claims marked **(unverified)** depend on behaviour the code does not show. Measu
 | Qwen gets at most 80 terms or 4 KB of hints, priority terms first. With 500 terms, about 420 never reach Qwen.                                                                   | `Server/src/domain/correction.ts:109`                                   |
 | The validator accepts Qwen joining 2–3 fragments into a hinted term within edit distance 1 (e.g. `mini max` → `MiniMax`).                                                        | `correction.ts:649` (`recognizedTerms`)                                 |
 | Speech and proof each run one job at a time through promise-chain FIFOs (`withStage`). There is no priority.                                                                     | `generation-service.ts:279`                                             |
-| `InferenceBackend.cancel()` kills the helpers. Cancelling a background job would force a model reload.                                                                           | `Server/src/inference/native-inference.ts:424`, `helper-process.ts:413` |
+| `InferenceBackend.cancel()` resets any active or loading helper; only idle warm helpers survive. Cancelling a background job would force a model reload.                         | `Server/src/inference/native-inference.ts:424`, `helper-process.ts:174` |
 | Both decoders are greedy (Parakeet `PARAKEET_SAMPLING_GREEDY`, Qwen `llama_sampler_init_greedy`), with `no_context`.                                                             | `Engine/worker.cpp`, `TextEngine/worker.cpp:173`                        |
 | parakeet.cpp exposes per-token `p`, `plog`, `t0`, `t1`, `is_word_start` and `parakeet_tokenize`. The helper discards them today.                                                 | `vendor/whisper.cpp/include/parakeet.h:53-67`, `:153`, `:327-332`       |
 | Retention purges `inference.wav` after `audioRetentionDays` (default 90). The audio corpus is a rolling window. `docs/architecture.md` says audio is always kept; that is stale. | `generation-service.ts:1276`                                            |
@@ -102,13 +102,15 @@ flowchart LR
 
 **1. Candidate generation.** Each source emits `Candidate { term, alias?, kind, evidence }`.
 
-- Mine `rawText` after `cleanTranscript`, **before** the dictionary is applied. Mining `finalText` would count an accepted alias's own output as fresh evidence for that alias, so the miner would keep confirming itself.
+- Mine `cleanTranscript(rawText)`, **before** the dictionary is applied. Mining `finalText` would count an accepted alias's own output as fresh evidence for that alias, so the miner would keep confirming itself.
+- Qwen's stored `inputText` and `outputText` are both downstream of `applyDictionary` (`generation-service.ts:1570`, `:1714`). The raw Qwen output isn't stored. So a Qwen fix counts as evidence only if two things hold: the term is absent from cleaned `rawText`, and applying that take's frozen dictionary snapshot to the cleaned text doesn't already produce it. The alias is the span of cleaned `rawText` that aligns opposite the term.
+- Imported Wispr records store Wispr's recognition as `rawText` (`imports.ts:812`), not Parakeet's. Leave them out of the native corpus, replay, blast radius and fire counts. Use them only through idea 10, where Parakeet re-decodes the audio and its output is stored separately.
 - Span extraction is a word-level alignment (Levenshtein over tokens) between the "heard" text and the "meant" text. The meant text is Qwen's accepted output, a teach label, the TTS script or Wispr's `pastedText`. The span opposite the term is the alias.
 - Group candidates by `dictionaryKey(term)`. Fold case, because preferred spellings already fix case and an alias that differs only by case is invalid.
 
 **2. Verification and scoring.**
 
-- **Text replay lift:** run the merged dictionary over every stored `rawText`. Count takes that newly contain T where some evidence says T was meant: a Qwen fix, a label, or a retry.
+- **Text replay lift:** run the baseline and merged dictionaries over every native take's cleaned `rawText`, using the live 24 KiB output limit. Count takes that newly contain T where some evidence says T was meant: a Qwen fix, a label, or a retry. This replays only the **first** dictionary pass. It shows what Qwen would receive, not the final output, because the second pass runs on Qwen output that the miner doesn't re-run.
 - **Evidence diversity:** count distinct takes, distinct days and distinct source kinds. One take seen three ways is still one take.
 - **Voice weight:** evidence in my voice (history, enrolment, Wispr) outweighs synthetic evidence (TTS, G2P). A TTS-only proposal is capped at the "low" confidence band.
 - **Alias selection:** at most 8 aliases per entry, minus those already present. Choose by greedy set cover over the evidence each alias recovers. When an entry is full, a strong new alias is proposed as a replacement for its lowest-firing one.
@@ -116,15 +118,15 @@ flowchart LR
 
 **3. Precision guard.** Checks run in order. Each failure carries a reason code shown in review.
 
-| Guard                   | Rule                                                                                                                                                                                                                        |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1 `invalid`            | `dictionaryValidationError` on the merged dictionary. Catches alias collisions with another term, the 8-alias limit, length and control characters.                                                                         |
-| G2 `commonWord`         | A single-word alias that is a common word is rejected outright (`off → auth`). A multi-word alias made only of common words (`code x`) must pass G3 with zero unexplained hits.                                             |
-| G3 `blastRadius`        | Replay the alias over all stored `rawText`. Hits not explained by evidence are would-be false rewrites. Reject above a threshold (start at 0 for all-common aliases, 1 per 500 takes otherwise). Review shows up to 5 hits. |
-| G4 `previouslyRejected` | `decisions.jsonl` suppresses the same `(term, alias)` pair, case-folded, until a new evidence kind appears, such as a teach label after a TTS-only rejection.                                                               |
-| G5 `judge` (soft)       | The Qwen judge (idea 17) and negative TTS probes (idea 15) lower the score. They never pass something G2–G3 rejected.                                                                                                       |
+| Guard                   | Rule                                                                                                                                                                                                                                                                                                |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1 `invalid`            | `dictionaryValidationError` on the merged dictionary. Catches alias collisions with another term, the 8-alias limit, length and control characters. Exception: an `addTerm` blocked only by the 500-entry cap stays queued as `needsSlot`, and G1 runs on the full removal-plus-addition at accept. |
+| G2 `commonWord`         | A single-word alias that is a common word is rejected outright (`off → auth`). A multi-word alias made only of common words (`code x`) must pass G3 with zero unexplained hits.                                                                                                                     |
+| G3 `blastRadius`        | Replay the alias over all stored `rawText`. Hits not explained by evidence are would-be false rewrites. Reject above a threshold (start at 0 for all-common aliases, 1 per 500 takes otherwise). Review shows up to 5 hits.                                                                         |
+| G4 `previouslyRejected` | `decisions.jsonl` suppresses the same `(term, alias)` pair, case-folded, until a new evidence kind appears, such as a teach label after a TTS-only rejection.                                                                                                                                       |
+| G5 `judge` (soft)       | The Qwen judge (idea 17) and negative TTS probes (idea 15) lower the score. They never pass something G2–G3 rejected.                                                                                                                                                                               |
 
-**Downgrade instead of drop.** When a real term fails G2 or G3 on an alias, the miner proposes the term as **priority** with no alias. Qwen then sees it in context, and the validator's split-name path (`recognizedTerms`) allows the fix only where it fits. Context-sensitive mishearings get context-sensitive handling without adding context rules to the dictionary.
+**Downgrade instead of drop.** When a real term fails G2 or G3 on an alias, the miner proposes the term as **priority** with no alias. That puts it inside Qwen's 80-term hint budget, so Qwen can fix it where the sentence suggests it. This is a limited fallback. The validator doesn't check meaning: its split-name path (`recognizedTerms`) only joins 2–3 fragments within edit distance 1. A distant mishearing like `cube cuddle` → `kubectl` gets a hint, not a guaranteed fix.
 
 **4. Proposal.** Proposal kinds: `addTerm`, `addAliases`, `replaceAlias`, `setPriority`, `removeAlias`, `removeTerm`. Proposals refresh in place as evidence grows and never duplicate. At most 10 new proposals per day reach the queue, highest score first, so review stays small.
 
@@ -152,7 +154,7 @@ sequenceDiagram
 ```
 
 - **Pause on `createGeneration`, not on seal.** A take starts when recording starts, and the recording itself takes seconds. A miner unit already running finishes inside that head start. The miner schedules no new units while any take is `receiving`, `queued`, `transcribing` or `proofreading`.
-- **Bounded units.** Each Parakeet unit is a crop of at most 10 s around a span. Synthetic clips are short anyway. The worst-case live delay is one unit **(unverified: measure `transcribeMs` for 10 s crops on the WSL CPU)**. The miner never cancels a helper, because cancel kills the process.
+- **Bounded units.** Each Parakeet unit is a crop of at most 10 s around a span. Synthetic clips are short anyway. The worst-case live delay is one unit **(unverified: measure `transcribeMs` for 10 s crops on the WSL CPU)**. The miner never cancels a helper, because cancelling resets any active or loading helper and forces a model reload.
 - **Crops go through the existing WAV path.** The miner writes a temporary 16 kHz WAV under `miner/scratch/` and calls `inference.transcribe` like a live take. No new helper protocol is needed for Phase 3, apart from optional token detail.
 - **Budget.** A daily CPU-seconds cap and a run window (default: overnight, 01:00–07:00 local). Heavy jobs on WSL starve the daily Parakeet instance, so the default is to run when I'm asleep.
 - **Text stages** run in the miner `Worker` at any idle time. They are cheap but still yield to the gate.
@@ -174,7 +176,7 @@ miner/
 interface DictionaryProposal {
   id: string;
   kind: "addTerm" | "addAliases" | "replaceAlias" | "setPriority" | "removeAlias" | "removeTerm";
-  status: "pending" | "accepted" | "rejected" | "snoozed" | "stale";
+  status: "pending" | "needsSlot" | "accepted" | "rejected" | "snoozed" | "stale";
   term: string;
   entryID?: string; // existing entry, when there is one
   aliases: string[]; // proposed additions (or the alias to remove)
@@ -194,7 +196,12 @@ interface DictionaryProposal {
   guard?: { downgradedFrom: "addAliases"; reason: "commonWord" | "blastRadius" };
   evidence: Evidence[]; // at most 8, most diverse first
   blastSamples: { generationID: string; snippet: string }[]; // at most 5
-  basis: { dictionaryRevision: number; minerVersion: string; speechModelSHA256?: string };
+  basis: {
+    dictionaryRevision: number;
+    minerVersion: string;
+    speechModelSHA256?: string;
+    target?: { term: string; aliases: string[]; listID: string; isPriority: boolean }; // entry as proposed against
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -224,6 +231,10 @@ interface DictionaryDecision {
   proposalID: string;
   decision: "accept" | "reject" | "snooze" | "regret";
   reason?: "wrongTerm" | "commonWord" | "notMine" | "duplicate" | "later";
+  kind: DictionaryProposal["kind"];
+  termKey: string; // dictionaryKey(term), so suppression survives proposal-store eviction
+  acceptedAliasKeys: string[];
+  rejectedAliasKeys: string[]; // unticked chips, or all on reject
   applied?: { term: string; aliases: string[]; isPriority: boolean; listID: string };
   features: DictionaryProposal["features"]; // snapshot at decision time
   decidedAt: string;
@@ -249,7 +260,7 @@ Add to `Server/api/openapi.yaml`, then regenerate Swift and hand-port to `Window
 
 Add `dictionarySuggestions: boolean` (default `false`) to `ServerPreferences`, so it is shared and revisioned like other settings. Heavy sources (TTS helper path, run window, CPU budget) are server arguments, like the other helper paths.
 
-Acceptance goes through the server so two clients can't race. Editing the dictionary by hand still uses `updatePreferences` and its revision check.
+Acceptance goes through the server so two clients can't race. Serializing writes isn't enough, though: an entry could be renamed or edited after the proposal was made. Inside the mutation queue, the server compares the target entry with the proposal's `basis`. If the entry's term, aliases or list changed, or the dictionary revision moved and the change touches this term, the proposal goes `stale` and is re-scored before it can be accepted. Editing the dictionary by hand still uses `updatePreferences` and its revision check.
 
 ### Review UX
 
@@ -273,7 +284,7 @@ Acceptance goes through the server so two clients can't race. Editing the dictio
 
 - Alias chips accept a subset. Unticked aliases are logged as rejected for that pair.
 - ▶ plays the evidence clip (Phase 3). Hearing my own voice settles most cases in a second.
-- **The 500-entry cap.** From 480 entries, a banner appears and the miner raises hygiene proposals first. An `addTerm` at the cap cannot be accepted until I pick an entry to remove; the removal picker lists the miner's dead-entry suggestions first. Aliases don't count toward the cap. Full entries get `replaceAlias` instead.
+- **The 500-entry cap.** From 480 entries, a banner appears and the miner raises hygiene proposals first. An `addTerm` at the cap waits as `needsSlot` and cannot be accepted until I pick an entry to remove; the removal picker lists the miner's dead-entry suggestions first. Aliases don't count toward the cap. Full entries get `replaceAlias` instead.
 - **Priority.** The priority toggle shows how many of the 80 hint slots are in use. The miner proposes priority for frequent terms that rely on Qwen, and proposes dropping it for terms that aliases fully cover.
 
 **Windows** (`Windows/src/settings/server.rs`) gets the same list, in the Win32 control style the dictionary editor already uses. It ships one phase after the Mac. Both clients fetch proposals on open and after each decision; no push channel is needed.
@@ -282,15 +293,15 @@ Acceptance goes through the server so two clients can't race. Editing the dictio
 
 The miner is meant to be hill-climbed, so it records:
 
-| Metric           | Definition                                                                                                                                                                              |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Precision@review | accepted ÷ decided, per source kind and per confidence band. The bands should be calibrated.                                                                                            |
-| Regret rate      | accepted aliases removed by hand within 30 days ÷ accepted.                                                                                                                             |
-| Yield            | accepted aliases per 100 takes mined, and per CPU-hour.                                                                                                                                 |
-| Qwen dependence  | share of term occurrences in `finalText` that only Qwen produced. This should fall as aliases land.                                                                                     |
-| Guard misses     | rejections with reason `commonWord` that no guard flagged.                                                                                                                              |
-| Live impact      | p50/p95 `queueWaitMs` of live takes when a miner unit ran in the previous 60 s versus not. The target is no measurable difference. Add a `minerActive` field to `generation_processed`. |
-| Review load      | pending count and median proposal age.                                                                                                                                                  |
+| Metric           | Definition                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Precision@review | accepted ÷ decided, per source kind and per confidence band. The bands should be calibrated.                                                                                                                                                                                                                                                                                                 |
+| Regret rate      | accepted aliases removed by hand within 30 days ÷ accepted.                                                                                                                                                                                                                                                                                                                                  |
+| Yield            | accepted aliases per 100 takes mined, and per CPU-hour.                                                                                                                                                                                                                                                                                                                                      |
+| Qwen dependence  | share of term occurrences in `finalText` that only Qwen produced. This should fall as aliases land.                                                                                                                                                                                                                                                                                          |
+| Guard misses     | rejections with reason `commonWord` that no guard flagged.                                                                                                                                                                                                                                                                                                                                   |
+| Live impact      | p50/p95 end-to-end live latency (`totalMs` plus `queueWaitMs`, which covers waits on both the speech and proof stages) when a miner unit ran in the previous 60 s versus not. Today's `queueWaitMs` covers the speech stage only, so a Qwen-judge unit wouldn't show up in it. The target is no measurable difference. Add `minerActive` and `proofWaitMs` fields to `generation_processed`. |
+| Review load      | pending count and median proposal age.                                                                                                                                                                                                                                                                                                                                                       |
 
 `GET /v1/dictionary/miner` returns the summary. The raw material (`decisions.jsonl` features plus outcomes) is what a later weight refit uses.
 
@@ -324,7 +335,7 @@ Each phase is useful on its own, and each one gates the next.
 | Phase | Scope                                                                                                                                                                                                                 | Gate to continue                                                                                      |
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | **0** | `inlay-server mine --data-dir <copy> --report`. Ideas 1, 2, 3 (frequency list only), 7, 8, 9. Text only: no inference, API or UI. I apply suggestions by hand.                                                        | At least 10 suggestions I'd accept from my real history, with fewer than half of all suggestions bad. |
-| **1** | In-server `DictionaryMiner` (text stages in a `Worker`, idle gate), `miner/` store, proposal API, `dictionarySuggestions` preference, Mac review queue, decisions log, delete hook, metrics endpoint.                 | Precision@review ≥ 70% over 2 weeks. Live `queueWaitMs` unchanged.                                    |
+| **1** | In-server `DictionaryMiner` (text stages in a `Worker`, idle gate), `miner/` store, proposal API, `dictionarySuggestions` preference, Mac review queue, decisions log, delete hook, metrics endpoint.                 | Precision@review ≥ 70% over 2 weeks. Live end-to-end latency unchanged.                               |
 | **2** | Windows review queue (`api.rs` types plus a settings section).                                                                                                                                                        | Parity with the Mac.                                                                                  |
 | **3** | Audio: idle speech-stage units; optional `detail: true` token output in `Engine/worker.cpp`; a `tokenize` request for idea 3; low-confidence spans (6); perturbations (11); evidence clips; teach (4); enrolment (5). | Voice sources add yield without lowering precision.                                                   |
 | **4** | Cold start: seed harvest CLI (12), Wispr corpus (10), phonetic neighbours (13), an optional TTS helper (14, 15) behind `INLAY_TTS_PATH`, off by default.                                                              | TTS-sourced proposals reach ≥ 60% precision, or the source is dropped.                                |
@@ -333,7 +344,7 @@ Each phase is useful on its own, and each one gates the next.
 ## Risks
 
 - **Common-word aliases corrupt real speech.** Mitigated by G2/G3, downgrade-to-priority and human review. This is the main risk, which is why review is mandatory.
-- **Self-confirmation.** Mining `finalText` would let accepted aliases manufacture their own evidence. Mine `rawText` before the dictionary, every time.
+- **Self-confirmation.** Mining `finalText`, or Qwen's stored input and output, would let accepted aliases manufacture their own evidence. Mine cleaned `rawText` before the dictionary, and discount any term that the take's own dictionary snapshot already produces.
 - **Qwen hallucinations become aliases.** A Qwen fix needs at least 2 takes, or corroboration from another source kind.
 - **Starving live takes.** WSL CPU is already tight. Mitigated by the gate on `createGeneration`, bounded units, the overnight window, the CPU budget and the `minerActive` metric.
 - **A rolling audio corpus.** The 90-day purge drops clips and audio sources. Text evidence survives.
