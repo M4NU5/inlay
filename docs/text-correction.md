@@ -14,7 +14,7 @@ Edit **Server preferences**, then **Save shared preferences**. All dictionary li
 
 ## Cleanup instructions
 
-The shared **Cleanup instructions** field is the Qwen system prompt. Its default has four freely editable sections: Cleanup, Spoken corrections, Preserve, and Output. It keeps intentional “like,” repetition, answers, numbers, and negations, while allowing explicit spoken corrections. Examples distinguish “42, sorry, 24” from a contrast such as “42, not 24.” It also forbids translation and added information.
+The shared **Cleanup instructions** field is the Qwen system prompt. Its default has four freely editable sections: Cleanup, Spoken corrections, Preserve, and Output. It removes hesitation sounds such as uh and um, and keeps intentional “like,” repetition, answers, numbers, and negations, while allowing explicit spoken corrections. Examples distinguish “42, sorry, 24” from a contrast such as “42, not 24.” It also forbids translation and added information. [Hill climbing](hill-climbing.md) records how this default was measured.
 
 **Reset to default** loads a draft; **Save shared preferences** applies it to future takes across clients. Existing custom prompts remain unchanged until edited or reset. Disabling **Proofread with Qwen** keeps the deterministic dictionary/list result, including fillers.
 
