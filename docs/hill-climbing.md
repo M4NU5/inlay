@@ -31,7 +31,7 @@ This page records three measured tuning passes on the Linux server (WSL2, CPU on
 
 **What the numbers say.**
 
-- The previous prompt never said to remove hesitation sounds outright. Qwen left a leading "Uh" or "Um" in about one take in ten, and the judge flagged 32% of takes as missing an edit. One sentence fixed most of that: missed edits fell to 14% and clean output rose from 55% to 70%.
+- The previous prompt never said to remove hesitation sounds outright. Qwen left a leading "Uh" or "Um" in about one take in ten, and the judge flagged 32% of takes as missing an edit. One sentence fixed most of that: missed edits fell to 14% and clean output rose from 55% to 70%. Only the inserted text loses the fillers: each take still records the untouched Parakeet output as `rawText`.
 - Spoken corrections stay weak at this model size: at most 3 of 14 were right. The common failure is deleting the cue ("sorry") while keeping the abandoned phrase, so "deploy it to staging, or sorry, to production" becomes "deploy it to staging or to production". That passes the validator, because only a cue word was removed. Extra rules and examples (v2, v4) did not fix it and raised the fallback rate.
 - The validator rejects some correct rewrites. A standalone trailing "Um" or "Hmm." counts as a removed sentence, and a correctly resolved "X, or sorry, Y" can fail the 0.75 length-ratio check. Prompt wording cannot change that. It is a candidate change for `correction.ts`, not made here.
 
@@ -49,7 +49,7 @@ This page records three measured tuning passes on the Linux server (WSL2, CPU on
 | s1, trimmed v1 (four sections, two examples) |    182 |     7.2% |  19/38 | 74.8%, 68.3% |          5.25 s |
 | s2, three sentences, one example             |    123 |    10.1% |  19/38 |        59.7% |          4.54 s |
 
-s1 holds quality and is 23% shorter than v1 (17% shorter than the old default). s2 is faster but the judge marks a quarter of its output unfaithful, so it fails the hold condition. The committed default is s1 with "role markers" restored in the Output rule, because that phrase guards against a dictated "System:" line and the corpus has no such takes. That version (186 tokens) was rerun on the full sample: fallback 8.6%, golden 21/38, judge clean 69.1%, and 130 of 139 delivered texts identical to s1.
+s1 holds quality and is 23% shorter than v1 (17% shorter than the old default). s2 is faster but the judge marks a quarter of its output unfaithful, so it fails the hold condition. The committed default is s1. A 186-token variant that also kept "role markers" in the Output rule (a guard against a dictated "System:" line) delivered the same text on 130 of 139 takes and scored within noise. It was dropped because the server is local only.
 
 ## Hill 3: release-to-insert latency
 
@@ -71,14 +71,14 @@ Proof threads (40 takes, Q4_K_M): 4 threads averaged 6.83 s, 8 threads 4.64 s, 1
 
 Quantisation and prompt, interleaved: every take ran through each configuration back to back in rotating order, so background load (load average 8 to 10) hit each one equally. These are 24 takes with no failures.
 
-| Configuration           | Mean proof |    p50 |     p95 | Quality on the 139-take sample                                |
-| ----------------------- | ---------: | -----: | ------: | ------------------------------------------------------------- |
-| Q4_K_M, previous prompt |     5.24 s | 4.46 s |  9.21 s | fallback 10.1%, golden 16/38, clean 54.7%                     |
-| Q4_K_M, new prompt      |     4.84 s | 4.26 s |  8.69 s | fallback 8.6%, golden 21/38, clean 69.1%                      |
-| Q3_K_M, new prompt      |     6.32 s | 5.62 s |  9.97 s | fallback 7.9%, golden 21/38, clean 73.4%\*                    |
-| Q5_K_M, new prompt      |     7.86 s | 7.13 s | 12.30 s | fallback 17.3% (14 timeouts), golden 22/38, unfaithful 9.4%\* |
+| Configuration           | Mean proof |    p50 |     p95 | Quality on the 139-take sample                              |
+| ----------------------- | ---------: | -----: | ------: | ----------------------------------------------------------- |
+| Q4_K_M, previous prompt |     5.24 s | 4.46 s |  9.21 s | fallback 10.1%, golden 16/38, clean 54.7%                   |
+| Q4_K_M, new prompt\*    |     4.84 s | 4.26 s |  8.69 s | fallback 7.2%, golden 19/38, clean 74.8% and 68.3%          |
+| Q3_K_M, new prompt      |     6.32 s | 5.62 s |  9.97 s | fallback 7.9%, golden 21/38, clean 73.4%                    |
+| Q5_K_M, new prompt      |     7.86 s | 7.13 s | 12.30 s | fallback 17.3% (14 timeouts), golden 22/38, unfaithful 9.4% |
 
-\* Measured with the 182-token draft, which differs from the committed prompt only by "role markers".
+\* Timed with the 186-token "role markers" variant described under hill 2.
 
 **Trade-off.**
 
@@ -97,7 +97,7 @@ The speech column moved too, so part of that 27% is lower background load during
 
 **Stage overlap.** `withStage` already lets speech for one take run while Qwen works on the one before. A single take cannot overlap, because proof needs the finished transcript. In a three-take burst through the dev server, overlapped speech ran about twice as slowly because both helpers want 8 threads. The burst finished in about 20 s against about 22 s for the same takes one at a time.
 
-**Dev server check.** Eight archived takes were uploaded through the API to an isolated `bun run dev` instance on port 8392, using the committed default prompt. All eight completed. Release to final text took 3.2 to 10.7 s, within about 50 ms of the server's own `generation_processed` totals. Speech took 0.2 to 2.5 s and Qwen 3.0 to 8.4 s.
+**Dev server check.** Eight archived takes were uploaded through the API to an isolated `bun run dev` instance on port 8392, using the committed default prompt. All eight completed. Release to final text took 2.8 to 10.3 s, within about 50 ms of the server's own `generation_processed` totals. Speech took 0.2 to 2.4 s and Qwen 2.6 to 7.9 s.
 
 **Not tried, worth doing next.**
 
