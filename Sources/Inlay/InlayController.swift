@@ -1069,6 +1069,7 @@ final class InlayController: ObservableObject {
         stopShortcutCheck()
         // Quitting leaves durable capture and server receipts resumable. A
         // later explicit History recovery cannot repeat a paste transaction.
+        outputAudioPending = false
         recorder.stopAcceptingAudio()
         try? uploadPipe?.finish()
         resetSession()
