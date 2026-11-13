@@ -1,6 +1,6 @@
 # Inlay for Windows
 
-A hold-to-talk dictation client for Windows. It sits in the notification area, records while you hold a key, sends the audio to an [Inlay server](../Server/README.md), and pastes the transcript at your cursor. It uses the same HTTP API (version 4) as the Mac app and needs no server changes.
+A hold-to-talk dictation client for Windows. It sits in the notification area, records while you hold a key, sends the audio to an [Inlay server](../Server/README.md), and pastes the transcript at your cursor. It uses the same HTTP API (version 7) as the Mac app and needs no server changes.
 
 It is a small Rust program: raw Win32 for the tray, main window, keyboard hook and paste, WASAPI (through `cpal`) for the microphone, and blocking HTTP (through `ureq`) for the server.
 
@@ -91,7 +91,7 @@ Files:
 
 The flow matches the Mac client and [`docs/client-server-contract.md`](../docs/client-server-contract.md):
 
-1. On an accepted hold, the client checks `/v1/health` (API version 4 and readiness) and creates a generation with a new `requestID`, the device identity and `mode: "dictation"`. If admission fails, it doesn't open the microphone. Test microphone uses `mode: "test"`, pastes nothing, and reports `tested`.
+1. On an accepted hold, the client checks `/v1/health` (API version 7 and readiness) and creates a generation with a new `requestID`, the device identity and `mode: "dictation"`. If admission fails, it doesn't open the microphone. Test microphone uses `mode: "test"`, pastes nothing, and reports `tested`.
 2. It records from the chosen microphone in shared mode. It downmixes to mono and resamples to 16 kHz float32 with a windowed-sinc filter.
 3. While recording, it uploads half-second chunks in sequence and waits for each acknowledgement. When the server snapshot has `keepOriginalAudio`, the same 16 kHz audio is also uploaded as the `original` stream.
 4. On release, it finishes with the exact frame counts, then follows the NDJSON events until the generation completes.

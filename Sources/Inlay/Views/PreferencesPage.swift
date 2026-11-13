@@ -23,8 +23,27 @@ private struct DevicePreferencesForm: View {
     @State private var showingDiagnostics = false
     @State private var deviceToRevoke: DeviceSummary?
     @StateObject private var triggerRecorder = TriggerKeyRecorder()
+    @StateObject private var updates = UpdateChecker()
 
     private var usesPlainHTTP: Bool { (try? ServerEndpoint(endpoint))?.usesPlainHTTP ?? false }
+
+    private var recordingOutputAudioCaption: String {
+        switch controller.recordingOutputAudio {
+        case .none: "Leaves system audio unchanged while recording."
+        case .mute: "Silences system audio, VoiceOver and dictation sounds. Unsupported outputs stay unchanged."
+        case .duck: "Lowers system audio, including VoiceOver, to a quarter of its starting volume. Unsupported outputs stay unchanged."
+        }
+    }
+
+    /// Screen hints need Screen Recording to capture and Accessibility to find the focused window.
+    private var screenContextWarning: String? {
+        guard controller.useScreenContext else { return nil }
+        if !controller.permissions.screenRecording {
+            return "Allow Screen Recording below, then reopen \(InlayBuild.current.displayName)."
+        }
+        return controller.permissions.accessibility ? nil
+            : "Allow Accessibility below so screen hints can find the window you are dictating into."
+    }
 
     var body: some View {
         Form {
@@ -133,7 +152,7 @@ private struct DevicePreferencesForm: View {
                 }
                 .accessibilityIdentifier("preferences.activation")
                 if controller.activationMode == .tapToggle {
-                    Text("Recording continues until you tap again, press the stop button, or reach 3 minutes.")
+                    Text("Recording continues until you tap again, press the stop button, or reach the recording limit.")
                         .font(.caption)
                         .foregroundStyle(InlayPalette.muted)
                 }
@@ -156,13 +175,24 @@ private struct DevicePreferencesForm: View {
                     }
                     .frame(height: 90)
                 }
-                Toggle("Mute system audio while recording", isOn: $controller.muteOutputWhileRecording)
-                    .accessibilityIdentifier("preferences.mute-output")
-                Text("Muting also silences VoiceOver and dictation sounds while recording.")
-                    .font(.caption)
-                    .foregroundStyle(InlayPalette.muted)
+                Picker("System audio while recording", selection: $controller.recordingOutputAudio) {
+                    ForEach(RecordingOutputAudio.allCases) { mode in Text(mode.title).tag(mode) }
+                }
+                .accessibilityIdentifier("preferences.mute-output")
+                Text(recordingOutputAudioCaption)
+                .font(.caption)
+                .foregroundStyle(InlayPalette.muted)
+                .lineLimit(2, reservesSpace: true)
                 Toggle("Play dictation sounds", isOn: $controller.dictationSoundsEnabled)
                     .accessibilityIdentifier("preferences.dictation-sounds")
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Use on-screen words as vocabulary hints", isOn: $controller.useScreenContext)
+                        .accessibilityIdentifier("preferences.screen-context")
+                    Text(screenContextWarning
+                         ?? "Reads the focused window on this Mac when a take starts. Only unusual names and terms are sent to the server as proofreading hints; screenshots and screen text are not.")
+                        .font(.caption)
+                        .foregroundStyle(screenContextWarning == nil ? InlayPalette.muted : InlayPalette.warning)
+                }
                 Toggle("Never leave transcripts on the clipboard", isOn: $controller.preserveClipboard)
                     .accessibilityIdentifier("preferences.preserve-clipboard")
                 Toggle("Start \(InlayBuild.current.displayName) at login", isOn: $controller.launchAtLogin)
@@ -185,6 +215,11 @@ private struct DevicePreferencesForm: View {
                               reviewGranted: true, action: controller.requestAccessibility)
                 PermissionRow(title: "Input Monitoring", detail: "Recognize your dictation key. With only this permission, dictations are copied, not inserted.", granted: controller.permissions.inputMonitoring,
                               reviewGranted: true, action: controller.requestInputMonitoring)
+                if controller.useScreenContext {
+                    PermissionRow(title: "Screen Recording", detail: "Read on-screen words for proofreading hints.",
+                                  granted: controller.permissions.screenRecording, reviewGranted: true,
+                                  action: controller.requestScreenRecording)
+                }
                 if !controller.permissions.accessibility && controller.permissions.inputMonitoring {
                     Text("Shortcut is on. Dictations will be copied, not inserted; paste with Command-V.")
                         .font(.caption)
@@ -212,6 +247,7 @@ private struct DevicePreferencesForm: View {
                             .foregroundStyle(InlayPalette.muted)
                     }
                 }
+                UpdateCheckRow(checker: updates)
                 Text("Quitting this app leaves your server running.")
                     .font(.caption)
                     .foregroundStyle(InlayPalette.muted)
@@ -485,6 +521,47 @@ struct ServerPreferencesPage: View {
     }
 }
 
+private struct UpdateCheckRow: View {
+    @ObservedObject var checker: UpdateChecker
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        LabeledContent {
+            if case .available(_, let page) = checker.state {
+                Button("Open download page") { openURL(page) }
+                    .accessibilityIdentifier("preferences.open-update")
+            } else {
+                Button(checker.state == .checking ? "Checking…" : "Check for updates") { checker.check() }
+                    .disabled(checker.state == .checking)
+                    .accessibilityIdentifier("preferences.check-updates")
+            }
+        } label: {
+            Text("Updates")
+            if let detail {
+                Text(detail).foregroundStyle(isWarning ? InlayPalette.warning : InlayPalette.muted)
+            }
+        }
+    }
+
+    private var isWarning: Bool {
+        if case .failed = checker.state { return true }
+        return false
+    }
+
+    private var detail: String? {
+        let name = InlayBuild.current.displayName
+        switch checker.state {
+        case .idle, .checking: return nil
+        case .current: return "\(name) is up to date."
+        case .noRelease: return "No Inlay release has been published yet."
+        case .available(let version, _):
+            return InlayBuild.current.isDevelopment
+                ? "Inlay \(version) is available. Pull and rebuild to update this development build."
+                : "Inlay \(version) is available. Quit Inlay, then replace it with the downloaded app."
+        case .failed(let message): return message
+        }
+    }
+}
 
 /// Captures one function-key press for the custom trigger. Text-typing keys
 /// are rejected (with a message) instead of recorded, so an Escape press

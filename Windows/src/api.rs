@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use std::{fmt, thread};
 
-pub const API_VERSION: u64 = 4;
+pub const API_VERSION: u64 = 7;
 const RESPONSE_LIMIT: u64 = 16 * 1024 * 1024;
 const EVENT_LINE_LIMIT: u64 = 2 * 1024 * 1024;
 /// A recording's audio is at most 180 seconds; original audio can be stereo
