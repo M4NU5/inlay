@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
 
 pub const SAMPLE_RATE: u32 = 16_000;
-/// The server accepts at most 180 seconds per recording.
+/// This client caps a recording at 180 seconds. The server accepts up to two hours.
 pub const MAX_FRAMES: u64 = 180 * SAMPLE_RATE as u64;
 
 /// Why capture stopped on its own.

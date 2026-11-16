@@ -2,9 +2,20 @@
 
 Hold a key, speak, and release to insert your dictation. Inlay is a native Swift macOS app backed by a Bun-compiled TypeScript/Fastify model server running on the same Mac, another Mac, or Linux. Audio uploads while you speak; the server returns progress and one finished transcript. You can start another take immediately: finished recordings queue on the server, and each result returns to its originating client for delivery.
 
-The dev runner builds **Inlay Dev**, with separate settings and visible Dev labels. For the regular app, run `./scripts/build-app.sh` and install `build/Inlay.app` in Applications. Both connect to an independently running server.
+Most people should [download the release](#download). From source, the dev runner builds **Inlay Dev**, with separate settings and visible Dev labels. For the regular app, run `./scripts/build-app.sh` and install `build/Inlay.app` in Applications. Both connect to an independently running server.
 
-## Get started on one Mac
+## Download
+
+Grab the latest release from [GitHub Releases](https://github.com/davis7dotsh/inlay/releases/latest). It requires Apple Silicon and macOS 14 or later.
+
+1. Download [`Inlay.dmg`](https://github.com/davis7dotsh/inlay/releases/latest/download/Inlay.dmg) and, optionally, its [`.sha256`](https://github.com/davis7dotsh/inlay/releases/latest/download/Inlay.dmg.sha256); check it with `shasum -a 256 -c Inlay.dmg.sha256`.
+2. Open the DMG and drag **Inlay** to **Applications**. The app is Developer ID signed and notarized.
+3. Open Inlay. Under **This Mac**, download the pinned models (about 4 GB) and install the bundled local server.
+4. Grant Microphone and Accessibility as described below, focus a text field, hold **Fn/Globe**, speak, and release.
+
+To run the server on another Mac or on Linux, download the matching `inlay-server-<platform>.tar.gz` from the same release and follow the [server guide](Server/README.md). Release notes live in [`docs/releases`](docs/releases).
+
+## Build from source on one Mac
 
 The app runs on Apple Silicon and macOS 14 or later. `Package.swift` and `LSMinimumSystemVersion` both set that floor to 14.0. Building requires a Mac: `scripts/build-app.sh` exits on Linux and other systems. The build needs full Xcode 26 or later, including the Metal compiler, because the client and the MLX helper require Swift 6.2+. You also need Bun 1.4.2, CMake, and Git. Xcode provides Swift. Bun manages JavaScript dependencies and builds standalone server executables. Linux can build and run the server; it cannot build `Inlay.app`.
 
@@ -27,7 +38,14 @@ Use your own model paths if they are already installed. The script builds the se
 2. Wait for the server to be ready. Focus a text field, hold **Right Option**, speak, and release.
 3. Change the shortcut under **This Mac**, choose inputs under **Microphone**, and edit shared cleanup instructions or dictionary entries under **Server preferences**.
 
-**Test microphone** shows a result in Inlay without inserting it. The regular app defaults to Fn/Globe; set macOS **Keyboard → Press Globe key to → Do Nothing** if its system action conflicts.
+**Test microphone** needs a ready server and shows a result in Inlay without inserting it. The regular app defaults to Fn/Globe; set macOS **Keyboard → Press Globe key to → Do Nothing** if its system action conflicts.
+
+## Long dictations and recovery
+
+- With an updated app **and server**, a take can run for **up to two hours**. Older servers still stop live dictation at three minutes. For hands-free recording, use **Start dictation** in the menu bar, or set the shortcut to **Double tap to toggle** under **This Mac**. Finish the take to keep it; the **×** button discards an active recording.
+- Inlay writes audio to this Mac while you talk. If the connection drops, keep speaking. Once a server is configured, you can also **start dictation while offline**; Inlay saves the audio needed for transcription, without a separate original-microphone track.
+- Leave Inlay open or reopen it with the **same server** selected. The saved count in the window or menu bar shows dictations awaiting upload. After recovery, choose **Copy finished dictation** or open **History**. Recovered text is never automatically pasted or copied over your clipboard.
+- Keep enough free disk space: one hour of speech audio uses about **230 MB** on this Mac, plus about **690 MB** for an optional 48 kHz mono original. If the Mac loses power, only audio already written to disk can be recovered.
 
 ## Use a server on another machine
 
@@ -90,7 +108,7 @@ For the packaged Mac app and server:
 
 Keep `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` set when starting the server. On Linux, `INLAY_TEXT_MODEL` must be the GGUF file, and `run-dev.sh` builds and starts the server without the app. After rebuilding an already-open client, quit and reopen it to load the new executable. `scripts/build-app.sh` signs with `INLAY_SIGNING_IDENTITY` when that is set. Otherwise it uses the Apple Development identity only when exactly one is installed, and ad-hoc signs in every other case. Ad-hoc rebuilds may require granting permissions again. A plain build does not notarize the app; notarization is the `--dist` distribution build described under [Releases](#releases).
 
-The dev runner stores shared history/settings in `.local/server`, device preferences in `.local/client`, and logs in `.local/server.log`. Keep experiment notes and generated artifacts under the ignored `.local/` directory too. Quitting the app leaves the server running. Recordings require an online, available server and have a three-minute limit.
+The dev runner stores shared history/settings in `.local/server`, device preferences in `.local/client`, and logs in `.local/server.log`. Keep experiment notes and generated artifacts under the ignored `.local/` directory too. Quitting the app leaves the server running.
 
 For newly launched Electron apps, Inlay requests accessibility support when a take begins and checks for an editable field for up to three seconds while recording starts independently. The field must become verifiable before you release the key; a short first take or slow renderer can still use the clipboard fallback. Unsupported native apps do not wait for this preparation. Enabling an Electron accessibility tree can increase that app's memory and CPU use for its lifetime; Inlay leaves it enabled so other assistive tools can continue using it. This activation mechanism is specific to Electron; Chrome fields use their existing accessibility support.
 
@@ -98,7 +116,7 @@ All connected Macs share history, tagged by device. Both original and inference 
 
 ## Releases
 
-GitHub Releases come from tags: a `client-v*` tag publishes the notarized `Inlay.dmg` from the `Client release package` workflow, and a `server-v*` tag publishes the server tarballs from `Server release packages`. Manual workflow runs upload Actions artifacts instead of publishing a release. You can also build the Mac app locally with `./scripts/build-app.sh` and copy `build/Inlay.app` where you want it. Pull-request CI builds the Mac app bundle to verify it, but not the MLX helper or the CUDA package, and publishes nothing. Details, artifact names, and checksums are in [how releases are produced](Server/README.md#releases).
+Pushing a `v*` tag that matches the `package.json` version runs the `Release` workflow, which publishes the notarized `Inlay.dmg`, the macOS and Linux server tarballs, and their `.sha256` files to one GitHub Release with notes from `docs/releases/<tag>.md`. Running it manually from a tag creates a draft release; from a branch it uploads Actions artifacts only. To cut a release, bump `package.json` and `CFBundleShortVersionString`/`CFBundleVersion` in `Resources/Info.plist` and `Resources/Info-Dev.plist` (`bun run check` fails if the versions differ), add the notes file, merge, and push the tag. You can also build the Mac app locally with `./scripts/build-app.sh` and copy `build/Inlay.app` where you want it. Pull-request CI builds the Mac app bundle to verify it, but not the MLX helper or the CUDA package, and publishes nothing. Details, assets, and the signing secrets are in [how releases are produced](Server/README.md#releases).
 
 ## Reference
 
