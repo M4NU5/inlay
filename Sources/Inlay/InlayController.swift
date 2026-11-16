@@ -990,6 +990,7 @@ final class InlayController: ObservableObject {
         let connection = activeClient
         // Stop through the writer's normal drain (queued buffers, converter
         // flush, fsync) rather than cancelling, and let quit wait for it.
+        outputAudioPending = false
         let stopping = isCapturing ? recorder.stopCapture() : nil
         let earlier = recorderStopTask
         terminationDrain = Task {
