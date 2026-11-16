@@ -14,7 +14,7 @@ Details:
 
 - A hold must last about 0.2 seconds before recording starts, so shortcuts that use the key never open the microphone.
 - Pressing another key while holding cancels the take. Keys you were already holding, such as a movement key in a game, don't count.
-- Takes shorter than 0.25 seconds are discarded. Takes stop at the server's 3-minute limit.
+- Takes shorter than 0.25 seconds are discarded. This client stops takes at 3 minutes.
 - You can start a new take while earlier ones are still transcribing. Pastes happen in release order, and never while the key is held.
 - If the text doesn't appear, open the tray menu and choose **Copy last message**, then paste it yourself. The **Dictation** page shows the last result too, with **Copy**.
 - If Inlay quits or loses the server while a take is transcribing, the result isn't lost. Once it finishes, the tray menu offers **Copy finished dictation** and the **Dictation** page shows it with **Copy**. Inlay never pastes it, because the cursor has moved on.
