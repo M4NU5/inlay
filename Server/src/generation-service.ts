@@ -277,6 +277,8 @@ interface ServiceConfiguration {
   dataDirectory: string;
   development: boolean;
   adminToken: string;
+  /** Seconds without a take before warm models unload; 0 or absent keeps them loaded. */
+  idleUnloadSeconds?: number;
 }
 
 const validDeviceLabel = (text: string) =>
@@ -323,6 +325,9 @@ export class GenerationService {
   private proofLoadError?: string;
   private warmupFailures = 0;
   private nextWarmupAt = 0;
+  private lastActivityAt = Date.now();
+  /** Models were unloaded for idleness; only a new take loads them again. */
+  private idleUnloaded = false;
   private stopping = false;
   private timer?: ReturnType<typeof setInterval>;
   private lastRetentionSweep = 0;
@@ -610,6 +615,7 @@ export class GenerationService {
   }
   start() {
     if (this.stopping || this.timer) return;
+    this.lastActivityAt = Date.now();
     this.beginWarmup();
     this.lastRetentionSweep = Date.now();
     void this.sweepAudioRetention().catch((error) => logError("retention_sweep_failed", error));
@@ -619,6 +625,7 @@ export class GenerationService {
     this.timer.unref();
   }
   private async tick() {
+    this.unloadIdleModels();
     // Synchronous heartbeat: do not add an await to this loop without re-queueing it.
     for (const [id, watchers] of this.subscribers) {
       const record = this.records.get(id);
@@ -697,7 +704,9 @@ export class GenerationService {
         : ready
           ? state.speechLoaded
             ? "Server ready."
-            : "Loading server models; recordings will queue."
+            : this.idleUnloaded
+              ? "Server ready; models load when you start dictating."
+              : "Loading server models; recordings will queue."
           : (failure ??
             (this.warming ? "Loading server models…" : "Server models are unavailable."));
     if (!state.speechLoaded) this.beginWarmup();
@@ -719,7 +728,10 @@ export class GenerationService {
         message: this.preferences.preferences.textCorrectionEnabled
           ? state.proofLoaded
             ? undefined
-            : (this.proofLoadError ?? "Unavailable; deterministic text is preserved.")
+            : (this.proofLoadError ??
+              (this.idleUnloaded
+                ? "Unloaded while idle; loads when you start dictating."
+                : "Unavailable; deterministic text is preserved."))
           : "Disabled",
       },
       message,
@@ -827,6 +839,10 @@ export class GenerationService {
           "server_busy",
           "The server is already processing the maximum number of recordings. Try again shortly.",
         );
+      // Readiness was read before the queue; an idle unload may have happened since.
+      const wasIdle = this.idleUnloaded;
+      this.lastActivityAt = Date.now();
+      this.idleUnloaded = false;
       const failure = this.speechLoadFailure(state);
       if (!state.available || failure) {
         this.beginWarmup();
@@ -834,6 +850,7 @@ export class GenerationService {
       }
       // Starting a take loads any cold model now, not when the recording is sealed.
       if (
+        wasIdle ||
         !state.speechLoaded ||
         (this.preferences.preferences.textCorrectionEnabled && !state.proofLoaded)
       )
@@ -1597,6 +1614,8 @@ export class GenerationService {
     const enqueuedAt = performance.now();
     const controller = new AbortController();
     this.processingControllers.set(id, controller);
+    // Reprocessing reloads helpers on demand, so they become idle-unloadable again.
+    this.idleUnloaded = false;
     // Jobs run concurrently; withStage serializes each helper's stage, so
     // completion order still equals seal order on both FIFO stages.
     const task = (async () => {
@@ -1610,6 +1629,7 @@ export class GenerationService {
       if (this.processingControllers.get(id) !== controller) return;
       this.processingControllers.delete(id);
       this.processingOrder = this.processingOrder.filter((queuedID) => queuedID !== id);
+      this.lastActivityAt = Date.now();
       this.beginWarmup();
     });
   }
@@ -1990,8 +2010,27 @@ export class GenerationService {
     ])
       await rm(join(this.directory(record.id), name), { force: true }).catch(() => {});
   }
+  /** Frees model memory after a quiet spell, like Vox; the next take reloads while you speak. */
+  private unloadIdleModels() {
+    const seconds = this.configuration.idleUnloadSeconds ?? 0;
+    if (!seconds || this.idleUnloaded || this.stopping || this.warming) return;
+    if (this.processingControllers.size || Date.now() - this.lastActivityAt < seconds * 1000)
+      return;
+    // A take that is still recording or uploading counts as activity.
+    for (const record of this.records.values()) if (!terminal(record)) return;
+    if (!this.inference.unloadIdle()) return;
+    // Speech was loaded, so any recorded load failure is stale; the next take retries cleanly.
+    this.speechLoadError = undefined;
+    this.proofLoadError = undefined;
+    this.warmupFailures = 0;
+    this.nextWarmupAt = 0;
+    this.idleUnloaded = true;
+    logInfo("models_unloaded_idle", { idleSeconds: seconds });
+  }
   private beginWarmup(force = false) {
     if (this.stopping || this.warming || this.processingControllers.size) return;
+    // Health polls and settings changes must not undo an idle unload.
+    if (this.idleUnloaded) return;
     if (!force && Date.now() < this.nextWarmupAt) return;
     this.warming = true;
     const controller = new AbortController();

@@ -105,6 +105,8 @@ export interface InferenceBackend {
     systemPrompt: string,
     signal?: AbortSignal,
   ): Promise<ProofInferenceResult>;
+  /** Synchronously stops idle helpers once speech is loaded; true if any stopped. */
+  unloadIdle(): boolean;
   cancel(): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -420,6 +422,14 @@ export class NativeInference implements InferenceBackend {
       ...(state.engineVersion !== undefined ? { engineVersion: state.engineVersion } : {}),
       ...(modelSHA256 !== undefined ? { modelSHA256 } : {}),
     };
+  }
+
+  unloadIdle() {
+    // A failed speech load keeps its warmup retries; only unload a working pair.
+    if (!this.speech.snapshot().loaded) return false;
+    const speech = this.speech.unloadIfIdle();
+    const proof = this.proof.unloadIfIdle();
+    return speech || proof;
   }
 
   async cancel() {

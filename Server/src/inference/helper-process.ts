@@ -175,6 +175,13 @@ export class HelperProcess {
     if (this.operation || this.loading || this.ready) this.reset(new InferenceError("cancelled"));
   }
 
+  /** Stops a warm helper that has no request or load in flight. */
+  unloadIfIdle() {
+    if (!this.snapshot().loaded || this.operation || this.loading || this.ready) return false;
+    this.reset(new InferenceError("cancelled"));
+    return true;
+  }
+
   /** Evicts a protocol-corrupt helper without blocking on its exit. */
   discard(error: InferenceError) {
     this.reset(error);
