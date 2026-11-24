@@ -18,15 +18,19 @@ export interface ServerConfiguration {
   adminTokenFile: string;
   adminTokenCreated: boolean;
   development: boolean;
+  /** Seconds without a take before the models are unloaded; 0 keeps them loaded. */
+  idleUnloadSeconds: number;
   inference: InferenceConfiguration;
 }
 
 export const usage = `Inlay server — independent dictation service
 inlay-server --data-dir PATH --speech-helper PATH --speech-model PATH --vad-model PATH \
-  --proof-helper PATH --proof-model PATH [--host 127.0.0.1] [--port 8391] [--token-file PATH] [--dev]
+  --proof-helper PATH --proof-model PATH [--host 127.0.0.1] [--port 8391] [--token-file PATH] [--dev] \
+  [--idle-unload-seconds 600]
 
 macOS uses Parakeet/Metal and Qwen/MLX. Linux uses Parakeet/CUDA or CPU and Qwen/llama.cpp.
 Models must already exist. The server never downloads or imports personal data automatically.
+Idle models unload after --idle-unload-seconds (0 keeps them loaded) and reload when a take starts.
 Use persistent storage for --data-dir. Without --token-file, an admin token is created at <data-dir>/admin-token.
 `;
 
@@ -40,6 +44,7 @@ const names = new Set([
   "vad-model",
   "proof-helper",
   "proof-model",
+  "idle-unload-seconds",
 ]);
 export const isLoopbackHost = (host: string) => ["localhost", "127.0.0.1", "::1"].includes(host);
 const expandPath = (value: string) =>
@@ -83,6 +88,14 @@ export async function parseConfiguration(
   if (!/^\d+$/.test(rawPort) || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw new Error("Port must be between 1 and 65535.");
   }
+  const rawIdle = value("idle-unload-seconds", "INLAY_IDLE_UNLOAD_SECONDS") ?? "600";
+  const idleUnloadSeconds = Number(rawIdle);
+  if (
+    !/^\d+$/.test(rawIdle) ||
+    !Number.isSafeInteger(idleUnloadSeconds) ||
+    idleUnloadSeconds > 86_400
+  )
+    throw new Error("Idle unload must be between 0 and 86400 seconds.");
   const dataDirectory = path("data-dir", "INLAY_SERVER_DATA_DIR");
   let token: string | undefined;
   let tokenFile = value("token-file", "INLAY_SERVER_TOKEN_FILE");
@@ -135,6 +148,7 @@ export async function parseConfiguration(
     adminTokenCreated,
     development,
     dataDirectory,
+    idleUnloadSeconds,
     inference: createInferenceConfiguration({
       speechHelper: path("speech-helper", "INLAY_ENGINE_PATH"),
       speechModel: path("speech-model", "INLAY_SPEECH_MODEL"),

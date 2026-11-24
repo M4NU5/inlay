@@ -19,6 +19,7 @@ export async function startServer(configuration: ServerConfiguration) {
         dataDirectory: configuration.dataDirectory,
         development: configuration.development,
         adminToken: configuration.token,
+        idleUnloadSeconds: configuration.idleUnloadSeconds,
       },
       new NativeInference(configuration.inference),
     );

@@ -167,6 +167,9 @@ Check `curl http://localhost:8391/v1/liveness` for reachability; for readiness d
 | `--vad-model`                       | `INLAY_VAD_PATH`                                   |
 | `--proof-helper`, `--proof-model`   | `INLAY_TEXT_ENGINE_PATH`, `INLAY_TEXT_MODEL`       |
 | `--dev`                             | `INLAY_DEV=1`                                      |
+| `--idle-unload-seconds`             | `INLAY_IDLE_UNLOAD_SECONDS`                        |
+
+The models unload after `--idle-unload-seconds` (default 600) with no takes, and reload when the next take starts, so the load overlaps speech. Health checks never reload them. `0` keeps them loaded.
 
 The dev runner fixes its host to loopback and defaults to port 8391, `.local/server` for data, and `.local/server.log` for logs. Set `INLAY_SPEECH_MODEL` and `INLAY_TEXT_MODEL` (or `INLAY_MODEL_DIR`) when using the paths above. Without those overrides, the dev runner and `bun run dev` use the `./scripts/setup.sh` download directory: `~/Library/Application Support/Inlay/Models` with `ggml-parakeet-tdt-0.6b-v3-f16.bin` and `Qwen3-4B-Instruct-2507-MLX-4bit` on macOS, or `.local/models` with `ggml-parakeet-tdt-0.6b-v3-f16.bin` and `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` on Linux. On macOS, Qwen falls back to `~/.inlay/models` when only that copy has all six pinned files. Existing installations can retain their archive, token file, and Qwen model location with the arguments or overrides above, but must install the Parakeet weights; see [upgrade guidance](../README.md#upgrade-an-existing-installation).
 
