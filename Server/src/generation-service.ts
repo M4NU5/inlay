@@ -728,7 +728,10 @@ export class GenerationService {
         message: this.preferences.preferences.textCorrectionEnabled
           ? state.proofLoaded
             ? undefined
-            : (this.proofLoadError ?? "Unavailable; deterministic text is preserved.")
+            : (this.proofLoadError ??
+              (this.idleUnloaded
+                ? "Unloaded while idle; loads when you start dictating."
+                : "Unavailable; deterministic text is preserved."))
           : "Disabled",
       },
       message,
@@ -836,15 +839,18 @@ export class GenerationService {
           "server_busy",
           "The server is already processing the maximum number of recordings. Try again shortly.",
         );
+      // Readiness was read before the queue; an idle unload may have happened since.
+      const wasIdle = this.idleUnloaded;
+      this.lastActivityAt = Date.now();
+      this.idleUnloaded = false;
       const failure = this.speechLoadFailure(state);
       if (!state.available || failure) {
         this.beginWarmup();
         throw new ServiceError(503, "server_unavailable", failure ?? state.message);
       }
-      this.lastActivityAt = Date.now();
-      this.idleUnloaded = false;
       // Starting a take loads any cold model now, not when the recording is sealed.
       if (
+        wasIdle ||
         !state.speechLoaded ||
         (this.preferences.preferences.textCorrectionEnabled && !state.proofLoaded)
       )
@@ -1608,6 +1614,8 @@ export class GenerationService {
     const enqueuedAt = performance.now();
     const controller = new AbortController();
     this.processingControllers.set(id, controller);
+    // Reprocessing reloads helpers on demand, so they become idle-unloadable again.
+    this.idleUnloaded = false;
     // Jobs run concurrently; withStage serializes each helper's stage, so
     // completion order still equals seal order on both FIFO stages.
     const task = (async () => {
@@ -2011,6 +2019,11 @@ export class GenerationService {
     // A take that is still recording or uploading counts as activity.
     for (const record of this.records.values()) if (!terminal(record)) return;
     if (!this.inference.unloadIdle()) return;
+    // Speech was loaded, so any recorded load failure is stale; the next take retries cleanly.
+    this.speechLoadError = undefined;
+    this.proofLoadError = undefined;
+    this.warmupFailures = 0;
+    this.nextWarmupAt = 0;
     this.idleUnloaded = true;
     logInfo("models_unloaded_idle", { idleSeconds: seconds });
   }
