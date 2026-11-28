@@ -1,6 +1,6 @@
 # Inlay
 
-Hold a key, speak, and release to insert your dictation. Inlay is a native Swift macOS app backed by a Bun-compiled TypeScript/Fastify model server running on the same Mac, another Mac, or Linux. Audio uploads while you speak; the server returns progress and one finished transcript. You can start another take immediately: finished recordings queue on the server, and each result returns to its originating client for delivery.
+Hold a key, speak, and release to insert your dictation. Inlay has native clients for macOS (Swift) and Windows: this fork's [Rust tray client](Windows/README.md) and upstream's [WPF client](docs/windows.md), backed by a Bun-compiled TypeScript/Fastify model server on macOS or Linux. Audio uploads while you speak; the server returns progress and one finished transcript. On macOS, you can start another take immediately: finished recordings queue on the server, and each result returns to its originating client for delivery.
 
 Most people should [download the release](#download). From source, the dev runner builds **Inlay Dev**, with separate settings and visible Dev labels. For the regular app, run `./scripts/build-app.sh` and install `build/Inlay.app` in Applications. Both connect to an independently running server.
 
@@ -14,6 +14,8 @@ Grab the latest release from [GitHub Releases](https://github.com/davis7dotsh/in
 4. Grant Microphone and Accessibility as described below, focus a text field, hold **Fn/Globe**, speak, and release.
 
 To run the server on another Mac or on Linux, download the matching `inlay-server-<platform>.tar.gz` from the same release and follow the [server guide](Server/README.md). Release notes live in [`docs/releases`](docs/releases).
+
+For upstream's WPF client on Windows, run `Inlay-Setup.exe` or open the portable `Inlay.exe`, connect to your server, then hold **left Ctrl + left Windows** to dictate. See [Windows setup and build instructions](docs/windows.md).
 
 ## Build from source on one Mac
 
