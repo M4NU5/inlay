@@ -16,14 +16,13 @@ mod this_pc;
 use self::layout::{Builder, Control, Icon, Layout, Look};
 use crate::app::{self, Dictation, Server, Settings};
 use crate::controller::Event;
-use crate::icons::Look as TrayLook;
 use crate::menu::{self, Anchor, Entry};
 use crate::microphones::Input;
 use crate::pending::Finished;
 use crate::privacy;
 use crate::theme::{self, Font, px, rect};
 use crate::win::{from_wide, wide};
-use crate::{audio, config, credentials, hotkey, startup, tray};
+use crate::{audio, config, credentials, hotkey, startup};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
@@ -403,9 +402,22 @@ pub fn open(page: Page) {
         }
         WINDOW.store(window, Ordering::SeqCst);
         theme::frame(window, Some(theme::CANVAS), false);
-        let icon = tray::icon(TrayLook::Idle) as LPARAM;
-        SendMessageW(window, WM_SETICON, ICON_SMALL as WPARAM, icon);
-        SendMessageW(window, WM_SETICON, ICON_BIG as WPARAM, icon);
+        // The app icon build.rs embeds as resource 1, at the sizes Windows uses.
+        // LR_SHARED caches it, so reopening the window doesn't leak handles.
+        for (kind, width, height) in [
+            (ICON_SMALL, SM_CXSMICON, SM_CYSMICON),
+            (ICON_BIG, SM_CXICON, SM_CYICON),
+        ] {
+            let icon = LoadImageW(
+                instance,
+                1 as _,
+                IMAGE_ICON,
+                GetSystemMetrics(width),
+                GetSystemMetrics(height),
+                LR_DEFAULTCOLOR | LR_SHARED,
+            );
+            SendMessageW(window, WM_SETICON, kind as WPARAM, icon as LPARAM);
+        }
 
         for (index, page) in PAGES.iter().enumerate() {
             let button = button(window, NAV + index as i32, page.title());
